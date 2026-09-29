@@ -1638,7 +1638,7 @@ def _cited_evidence(
                 "logical_path": binding["source_path"],
                 "source_sha256": binding["source_digest"],
                 "quote_sha256": binding["quote_sha256"],
-                "quoted_text": item["quoted_text"],
+                "quoted_text": binding["quote_text"],
             }
         )
     return cited
@@ -2178,13 +2178,8 @@ def _bound_part(
     return bound[0]
 
 
-def _evidence_binding(item: object, inputs: CompileInputs) -> dict[str, str]:
-    """Bind one quoted line to an exact byte span of an immutable daily source."""
-    return _bound_evidence_block(item, inputs)[0]
-
-
 def _bound_evidence_block(item: object, inputs: CompileInputs) -> tuple[dict[str, str], bytes]:
-    """The binding, and the daily block the quote was found in."""
+    """The binding (including its exact literal) and the daily block it names."""
     date, timestamp, quote = _require_evidence_fields(item)
     quote_bytes = quote.encode("utf-8")
     source, block, marker_at = _bound_part(
@@ -2209,6 +2204,7 @@ def _bound_evidence_block(item: object, inputs: CompileInputs) -> tuple[dict[str
         "source_path": source.logical_path,
         "source_digest": source.sha256,
         "quote_sha256": sha256_bytes(quote_bytes),
+        "quote_text": quote,
         "reference": str(reference),
     }
     return binding, block
@@ -2360,8 +2356,9 @@ def _derived_claim(
     if not isinstance(candidate, Mapping):
         raise ValueError("compile claim candidate must be an object")
     item = _claim_evidence_item(operation, candidate.get("evidence_index"))
-    date, timestamp, quote = _require_evidence_fields(item)
-    binding = _evidence_binding(item, inputs)
+    date, timestamp, _proposed_quote = _require_evidence_fields(item)
+    binding, _block = _bound_evidence_block(item, inputs)
+    quote = binding["quote_text"]
     semantic = _semantic_payload(_proposed_semantics(candidate, date))
     fingerprint = sha256_bytes(canonical_json_bytes(semantic))
     return {
@@ -2961,7 +2958,7 @@ def _bound_evidence(
     return [
         {
             "operation_path": operation_path,
-            **{key: value for key, value in binding.items() if key != "reference"},
+            **{key: binding[key] for key in ("source_path", "source_digest", "quote_sha256")},
         }
         for binding in bindings
     ]

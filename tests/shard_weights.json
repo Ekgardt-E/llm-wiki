@@ -391,7 +391,7 @@
   "test_community_takes_a_symbol_anchor.py": 0.0,
   "test_comparative_benchmark.py": 11.32,
   "test_compile_cache.py": 4.97,
-  "test_compile_claims_producer.py": 9.31,
+  "test_compile_claims_producer.py": 0.65,
   "test_compile_failure.py": 1.88,
   "test_compile_hardening.py": 25.89,
   "test_compile_integration.py": 1.39,
