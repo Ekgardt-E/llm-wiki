@@ -41,9 +41,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # No stand-ins: a module that cannot import fails the hook, which the host shows
 # as a non-blocking hook error and the adapter records as a lost capture
 # (docs/research/2026-09-25-a-tool-call-in-the-vault-is-captured.md).
+from memory_state import (
+    HOOK_STATE_LOCK_TIMEOUT,  # noqa: E402
+    update_state,  # noqa: E402
+)
 from memory_state import ROOT as _MS_ROOT  # noqa: E402
 from memory_state import STATE_ROOT as _MS_STATE  # noqa: E402
-from memory_state import update_state  # noqa: E402
 
 ROOT = Path(os.environ.get("LLM_WIKI_ROOT", str(_MS_ROOT))).resolve()
 STATE_ROOT = Path(os.environ.get("LLM_WIKI_STATE_ROOT", str(_MS_STATE))).resolve()
@@ -138,7 +141,7 @@ def _claim_tool_operation(
     source_event_id: str | None = None,
 ) -> str | None:
     return claim_operation(
-        update_state,
+        lambda mutate: update_state(mutate, lock_timeout=HOOK_STATE_LOCK_TIMEOUT),
         namespace="tool_capture_dedupe",
         key=_tool_operation_key(slug, tool, target),
         prefix="post-tool",
@@ -153,7 +156,7 @@ def _complete_tool_operation(
     slug: str, tool: str, target: str, operation_id: str
 ) -> None:
     complete_operation(
-        update_state,
+        lambda mutate: update_state(mutate, lock_timeout=HOOK_STATE_LOCK_TIMEOUT),
         namespace="tool_capture_dedupe",
         key=_tool_operation_key(slug, tool, target),
         operation_id=operation_id,

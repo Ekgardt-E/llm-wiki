@@ -357,7 +357,7 @@
   "test_capture_diagnostics.py": 1.23,
   "test_capture_failure_is_recorded.py": 0.03,
   "test_capture_failure_trail_names_the_event.py": 0.01,
-  "test_capture_hooks.py": 21.14,
+  "test_capture_hooks.py": 7.69,
   "test_capture_intent_adoption.py": 71.37,
   "test_capture_terminal.py": 115.29,
   "test_capture_worker_dispatch.py": 15.65,
