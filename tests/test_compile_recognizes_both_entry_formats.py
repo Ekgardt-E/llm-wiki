@@ -1,6 +1,8 @@
 """Captured headings must compile, resume and remain verifiable after growth."""
 from __future__ import annotations
 
+import os
+
 import compile_memory as compiler
 import evidence_resolver as evidence
 import pytest
@@ -55,6 +57,60 @@ def test_a_historical_heading_part_resolves_after_growth() -> None:
     grown = content + b"\n## [11:00:00] later\nmore evidence\n"
     assert evidence.compile_part_slice(grown, sha256_bytes(part)) == part
     assert evidence.compile_part_slice(grown.replace(b"evidence", b"changed!"), sha256_bytes(part)) is None
+
+
+def _historical_resolver(tmp_path):
+    content = b"## [10:00:00] session\nfirst evidence\nsecond evidence\n"
+    daily = tmp_path / "knowledge/daily/2026-01-01.md"
+    daily.parent.mkdir(parents=True)
+    daily.write_bytes(content + b"\n## [11:00:00] later\nnew evidence\n")
+    start = content.index(b"first evidence")
+    reference = evidence.EvidenceRef(
+        "2026-01-01", sha256_bytes(content), "10:00:00", start, start + 14,
+    )
+    return evidence.EvidenceResolver(tmp_path), daily, reference
+
+
+def test_references_to_one_historical_part_share_the_digest_search(tmp_path, monkeypatch):
+    resolver, _daily, first = _historical_resolver(tmp_path)
+    second = evidence.EvidenceRef(
+        first.daily_id, first.source_sha256, first.block_id,
+        first.byte_end + 1, first.byte_end + 16,
+    )
+    searched = []
+    original = evidence.compile_part_slice
+
+    def search(content, digest):
+        searched.append(digest)
+        return original(content, digest)
+
+    monkeypatch.setattr(evidence, "compile_part_slice", search)
+    assert resolver.resolve(first).bytes == b"first evidence"
+    assert resolver.resolve(second).bytes == b"second evidence"
+    assert searched == [first.source_sha256]
+
+
+def test_cached_part_rejects_changed_bytes_even_when_metadata_is_restored(tmp_path):
+    resolver, daily, reference = _historical_resolver(tmp_path)
+    assert resolver.resolve(reference).bytes == b"first evidence"
+    metadata = daily.stat()
+    original = daily.read_bytes()
+    daily.write_bytes(original.replace(b"first evidence", b"false evidence"))
+    os.utime(daily, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+    with pytest.raises(evidence.EvidenceResolutionError, match="source hash mismatch"):
+        resolver.resolve(reference)
+    daily.write_bytes(original)
+    assert resolver.resolve(reference).bytes == b"first evidence"
+
+
+def test_cached_part_survives_append_but_not_source_removal(tmp_path):
+    resolver, daily, reference = _historical_resolver(tmp_path)
+    assert resolver.resolve(reference).bytes == b"first evidence"
+    daily.write_bytes(daily.read_bytes() + b"\n## [12:00:00] append\nmore\n")
+    assert resolver.resolve(reference).bytes == b"first evidence"
+    daily.unlink()
+    with pytest.raises(evidence.EvidenceResolutionError):
+        resolver.resolve(reference)
 
 
 def test_heading_day_can_be_packed(tmp_path, monkeypatch) -> None:

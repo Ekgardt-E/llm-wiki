@@ -1179,6 +1179,7 @@ class EvidenceResolver:
         self.state_root = state_root
         self.daily_root = self.vault / "knowledge" / "daily"
         self.archive_root = self.daily_root / "archive"
+        self._flat_parts: dict[Path, tuple[str, dict[str, bytes | None]]] = {}
 
     def resolve(self, reference: EvidenceRef | str) -> ResolvedEvidence:
         ref = EvidenceRef.parse(reference) if isinstance(reference, str) else reference
@@ -1191,12 +1192,25 @@ class EvidenceResolver:
         return self._resolve_flat(ref, content, flat)
 
     def _resolve_flat(self, ref: EvidenceRef, content: bytes, flat: Path):
-        if sha256_bytes(content) == ref.source_sha256:
+        current_digest = sha256_bytes(content)
+        if current_digest == ref.source_sha256:
             return self._slice(ref, content, flat, "flat")
-        part = compile_part_slice(content, ref.source_sha256)
+        part = self._flat_part(flat, content, current_digest, ref.source_sha256)
         if part is None:
             raise EvidenceResolutionError("flat daily source hash mismatch")
         return self._slice(ref, part, flat, "flat-part")
+
+    def _flat_part(
+        self, flat: Path, content: bytes, current_digest: str, source_digest: str,
+    ) -> bytes | None:
+        """Reuse a historical search only for freshly read, identical source bytes."""
+        previous_digest, parts = self._flat_parts.get(flat, ("", {}))
+        if previous_digest != current_digest:
+            parts = {}
+            self._flat_parts[flat] = (current_digest, parts)
+        if source_digest not in parts:
+            parts[source_digest] = compile_part_slice(content, source_digest)
+        return parts[source_digest]
 
     def resolve_bytes(
         self,
