@@ -2068,7 +2068,8 @@ def _scan_queue_database(
             rows, now=now, deadline=deadline, details=details, states=states
         )
         _append_queue_scan_codes(details, unknown_state, corrupt_metadata, rows)
-        details["dead_unresolved"], details["oldest_dead_days"] = _dead_backlog(rows, now)
+        resolved = _resolved_queue_ancestors(rows, state_root)
+        details["dead_unresolved"], details["oldest_dead_days"] = _dead_backlog(rows, now, resolved)
         _count_queue_side_tables(database, tables, details, now)
         _validate_queue_results(state_root, references, result_hashes, details)
         return _QueueScan(None, unknown_state, corrupt_metadata)
@@ -2092,10 +2093,67 @@ def _queue_pending_work(states: dict[str, int], details: dict) -> bool:
 # weekly that would export them had not run since 09-13 (audit 2026-09-27 B-13,
 # docs/research/2026-09-27-a-dead-task-counts-until-it-is-resolved.md). The age
 # is shown, not used to hide.
-def _dead_backlog(rows: list[sqlite3.Row], now: datetime) -> tuple[int, int | None]:
-    """(dead tasks in the queue, age in days of the oldest)."""
-    moments = [_dead_moment(row) for row in rows if row["state"] == "dead"]
+def _dead_backlog(
+    rows: list[sqlite3.Row], now: datetime, resolved: frozenset[str] | set[str] = frozenset(),
+) -> tuple[int, int | None]:
+    """Unresolved dead tasks and the oldest age; retry history remains retained."""
+    moments = _unresolved_dead_moments(rows, resolved)
     return len(moments), _oldest_age_days([moment for moment in moments if moment is not None], now)
+
+
+def _unresolved_dead_moments(rows: list[sqlite3.Row], resolved: frozenset[str] | set[str]) -> list:
+    pending = [row for row in rows if row["state"] == "dead"]
+    return [_dead_moment(row) for row in pending if not _row_is_resolved(row, resolved)]
+
+
+def _row_is_resolved(row: sqlite3.Row, resolved: frozenset[str] | set[str]) -> bool:
+    return "id" in row.keys() and row["id"] in resolved
+
+
+def _verified_queue_success(row: sqlite3.Row, state_root: Path) -> bool:
+    required = {"id", "state", "result_reference", "result_sha256"}
+    if not required <= set(row.keys()):
+        return False
+    if row["state"] != "succeeded" or not isinstance(row["result_reference"], str):
+        return False
+    raw = _queue_result_bytes(state_root, row["result_reference"])
+    return raw is not None and hashlib.sha256(raw).hexdigest() == row["result_sha256"]
+
+
+def _matching_retry_parent(row: sqlite3.Row, by_id: dict[str, sqlite3.Row]) -> str | None:
+    required = {"redrive_of", "input_hash", "kind"}
+    if not required <= set(row.keys()):
+        return None
+    parent = by_id.get(row["redrive_of"])
+    if parent is None or not required <= set(parent.keys()):
+        return None
+    return row["redrive_of"] if _same_retry_input(row, parent) else None
+
+
+def _same_retry_input(row: sqlite3.Row, parent: sqlite3.Row) -> bool:
+    return bool(row["input_hash"]) and (row["input_hash"], row["kind"]) == (parent["input_hash"], parent["kind"])
+
+
+def _mark_resolved_queue_ancestors(
+    row: sqlite3.Row, by_id: dict[str, sqlite3.Row], resolved: set[str],
+) -> None:
+    parent = _matching_retry_parent(row, by_id)
+    while parent is not None and parent not in resolved:
+        resolved.add(parent)
+        parent = _matching_retry_parent(by_id[parent], by_id)
+
+
+def _resolved_queue_ancestors(rows: list[sqlite3.Row], state_root: Path) -> set[str]:
+    by_id = {row["id"]: row for row in rows if "id" in row.keys()}
+    resolved: set[str] = set()
+    for row in by_id.values():
+        if _verified_retry_success(row, by_id, state_root):
+            _mark_resolved_queue_ancestors(row, by_id, resolved)
+    return resolved
+
+
+def _verified_retry_success(row: sqlite3.Row, by_id: dict, state_root: Path) -> bool:
+    return _matching_retry_parent(row, by_id) is not None and _verified_queue_success(row, state_root)
 
 
 def _oldest_age_days(moments: list[datetime], now: datetime) -> int | None:
@@ -4742,19 +4800,19 @@ def _deferred_sentence(details: dict) -> str:
     )
 
 
-def _capture_loss_result(lost: int, live: bool, details: dict) -> dict:
+def _capture_failure_result(failures: int, live: bool, details: dict) -> dict:
     """The capture verdict, once the diagnostics themselves have been read."""
     suffix = _deferred_sentence(details)
     if live:
-        return _result("capture", "degraded", f"{lost} capture(s) were lost.{suffix}", details)
-    if lost:
+        return _result("capture", "degraded", f"{failures} capture failure event(s) recorded; retries are included, unique losses are not established.{suffix}", details)
+    if failures:
         return _result(
             "capture",
             "ok",
-            f"{lost} capture(s) were lost, none recently.{suffix}",
+            f"{failures} historical capture failure event(s), none recently; unique losses are not established.{suffix}",
             details,
         )
-    return _result("capture", "ok", f"No lost capture is recorded.{suffix}", details)
+    return _result("capture", "ok", f"No capture failure is recorded.{suffix}", details)
 
 
 def _tool_failure_check(state_root: Path, deadline: float) -> dict:
@@ -4895,7 +4953,7 @@ def _near_ceilings(root: Path, values: dict) -> dict:
 
 
 def _capture_check(root: Path, state_root: Path, deadline: float) -> dict:
-    """Report captures the hooks lost, so a silent loss is visible in health."""
+    """Report failed attempts without equating retries with unique lost captures."""
     from capture_diagnostics import (
         capture_deferred_totals,
         capture_failure_is_live,
@@ -4905,10 +4963,10 @@ def _capture_check(root: Path, state_root: Path, deadline: float) -> dict:
 
     state, state_error = _read_state(state_root, deadline)
     totals = capture_failure_totals(state)
-    lost = sum(totals.values())
+    failures = sum(totals.values())
     live = capture_failure_is_live(state)
     details: dict[str, Any] = {
-        "lost": lost,
+        "failure_events": failures,
         "kinds": totals,
         "deferred": sum(capture_deferred_totals(state).values()),
         "trail": "logs/capture-failures.jsonl",
@@ -4928,7 +4986,7 @@ def _capture_check(root: Path, state_root: Path, deadline: float) -> dict:
     details["adoption_state"] = adoption
     if adoption not in {"adopted", "unknown"}:
         return _result("capture", "degraded", _capture_disabled_message(adoption), details)
-    return _capture_loss_result(lost, live, details)
+    return _capture_failure_result(failures, live, details)
 
 
 def _adoption_state(root: Path, state_root: Path) -> str:

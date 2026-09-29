@@ -572,7 +572,7 @@ def _recent_loss(totals: dict[str, int], moment: str, now: datetime | None) -> b
 
 
 def capture_failure_line(state: dict) -> str:
-    """One SessionStart line naming lost captures, empty when nothing was lost.
+    """One SessionStart line naming failed attempts, not inferred unique losses.
 
     The count is cumulative and nothing clears it on its own, so the line has to
     say when this last happened. Without that, a loss fixed months ago reads
@@ -581,12 +581,13 @@ def capture_failure_line(state: dict) -> str:
     if not capture_failure_is_live(state):
         return ""
     totals = capture_failure_totals(state)
-    lost = sum(totals.values())
+    failures = sum(totals.values())
     detail = ", ".join(f"{kind} {count}" for kind, count in sorted(totals.items()))
     last_at = last_capture_failure_at(state)
     when = f", last at {last_at}" if last_at else ""
     return (
-        f"- **Capture**: ⚠️ {lost} capture(s) lost ({detail}{when}) — "
+        f"- **Capture**: ⚠️ {failures} capture failure event(s) ({detail}{when}); "
+        "retries are included, unique losses are not established — "
         f"{_trail_pointer()} Retire with "
         f"`uv run python scripts/capture_diagnostics.py --clear`."
     )

@@ -3648,7 +3648,7 @@ def test_lost_captures_are_reported_as_a_degraded_capture_check(tmp_path):
     check = _check(doctor.run_doctor(root=root, state_root=state_root, home=home), "capture")
 
     assert check["status"] == "degraded"
-    assert check["details"]["lost"] == 3
+    assert check["details"]["failure_events"] == 3
     assert check["details"]["kinds"] == {"session_end": 2, "pre_compact": 1}
     assert "capture-failures.jsonl" in check["details"]["trail"]
     del home
@@ -3683,7 +3683,7 @@ def test_a_loss_that_stopped_happening_returns_the_capture_check_to_green(tmp_pa
     check = _check(doctor.run_doctor(root=root, state_root=state_root, home=home), "capture")
 
     assert check["status"] == "ok"
-    assert check["details"]["lost"] == 2
+    assert check["details"]["failure_events"] == 2
     assert check["details"]["live"] is False
     del home
 
@@ -3697,7 +3697,7 @@ def test_a_vault_without_lost_captures_reports_the_capture_check_as_ok(tmp_path)
     check = _check(doctor.run_doctor(root=root, state_root=state_root, home=home), "capture")
 
     assert check["status"] == "ok"
-    assert check["details"]["lost"] == 0
+    assert check["details"]["failure_events"] == 0
     del home
 
 def _stubbed_maintenance(doctor, monkeypatch, releases: list[object]) -> None:
@@ -4341,7 +4341,7 @@ def test_deferred_writes_are_reported_beside_lost_captures_not_as_them(tmp_path)
     check = _check(doctor.run_doctor(root=root, state_root=state_root, home=home), "capture")
 
     assert check["status"] == "ok"
-    assert check["details"]["lost"] == 0
+    assert check["details"]["failure_events"] == 0
     assert check["details"]["deferred"] == 17
     assert "17 write(s) were deferred by a writer race" in check["message"]
     del home

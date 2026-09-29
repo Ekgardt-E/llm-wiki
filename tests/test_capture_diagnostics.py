@@ -57,7 +57,7 @@ def test_counter_accumulates_and_surfaces_a_session_line(diagnostics):
 
     assert module.capture_failure_totals(state) == {"post_tool_append": 3}
     line = module.capture_failure_line(state)
-    assert "3 capture(s) lost" in line
+    assert "3 capture failure event(s)" in line
     assert "post_tool_append 3" in line
 
 
@@ -150,7 +150,7 @@ def test_session_start_shows_lost_captures(monkeypatch):
 
     block = session_start_context.metacognitive_block()
 
-    assert "2 capture(s) lost" in block
+    assert "2 capture failure event(s)" in block
 
 
 def test_session_start_stops_naming_a_loss_that_stopped_happening(monkeypatch):
@@ -173,7 +173,7 @@ def test_session_start_stops_naming_a_loss_that_stopped_happening(monkeypatch):
 
     block = session_start_context.metacognitive_block()
 
-    assert "capture(s) lost" not in block
+    assert "capture failure event(s)" not in block
 
 
 def test_a_capture_lost_today_is_live_and_one_lost_last_month_is_not():
