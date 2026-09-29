@@ -1720,6 +1720,7 @@ def _empty_queue_details() -> tuple[dict, dict[str, int]]:
         "codes": [],
         "capabilities": [],
         "live_workers": 0,
+        "live_operators": 0,
         "live_migrations": 0,
         "results_retained": 0,
         "results_invalid": 0,
@@ -1939,10 +1940,14 @@ def _count_queue_rows(
 
 
 def _count_owner_role(row: sqlite3.Row, details: dict) -> None:
-    if row["role"] == "worker":
-        details["live_workers"] += 1
-    if row["role"] == "migration":
-        details["live_migrations"] += 1
+    counter = {
+        "worker": "live_workers",
+        "operator": "live_operators",
+        "migration": "live_migrations",
+    }.get(row["role"])
+    if counter is None:
+        raise ValueError("queue owner role is unknown")
+    details[counter] += 1
 
 
 def _count_live_owner_role(row: sqlite3.Row, details: dict, now: datetime) -> None:
@@ -1961,6 +1966,16 @@ def _count_one_queue_owner(row: sqlite3.Row, details: dict, now: datetime) -> No
     _count_live_owner_role(row, details, now)
 
 
+def _queue_owner_observation(row: sqlite3.Row) -> dict:
+    """Read current projections and pre-adoption owners without changing either."""
+    fields = {"token": "token", "role": "role", "pid": "pid"}
+    if "owner_token" in row.keys():
+        fields = {"token": "owner_token", "role": "domain_role", "pid": "process_id"}
+    if not set(fields.values()).issubset(row.keys()):
+        raise ValueError("queue owner columns are incomplete")
+    return dict(row, **{name: row[column] for name, column in fields.items()})
+
+
 def _count_queue_ownership(
     database: sqlite3.Connection, tables: set[str], details: dict, now: datetime
 ) -> None:
@@ -1972,7 +1987,7 @@ def _count_queue_ownership(
     if len(rows) > MAX_OPERATIONAL_ROWS:
         details["deletion_codes"].append("queue_owner_state_unknown")
     for row in rows[:MAX_OPERATIONAL_ROWS]:
-        _count_one_queue_owner(row, details, now)
+        _count_one_queue_owner(_queue_owner_observation(row), details, now)
 
 
 def _count_queue_side_tables(
@@ -2184,6 +2199,7 @@ def _queue_status(
 def _append_queue_deletion_codes(details: dict) -> None:
     for key, code in (
         ("live_workers", "queue_worker_live"),
+        ("live_operators", "queue_operator_live"),
         ("live_migrations", "queue_migration_live"),
         ("results_invalid", "queue_result_state_unknown"),
     ):

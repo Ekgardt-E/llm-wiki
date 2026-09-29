@@ -4412,6 +4412,108 @@ def test_the_claim_check_names_the_cause_the_pages_and_the_repair() -> None:
     assert "doctor.py --repair" in result["message"]
 
 
+@pytest.mark.parametrize(
+    ("role", "counter", "blocker"),
+    [
+        ("queue-worker", "live_workers", "queue_worker_live"),
+        ("queue-operator", "live_operators", "queue_operator_live"),
+    ],
+)
+def test_doctor_reads_an_active_v3_queue_owner(tmp_path, role, counter, blocker):
+    import doctor
+    from memory_queue import active_memory_queue
+
+    root, state_root, _home = _build_root(tmp_path)
+    _adopt(root, state_root)
+    queue = active_memory_queue(root, state_root)
+
+    with queue.queue_owner(role=role, scope="doctor-regression"):
+        check = doctor._queue_check(
+            state_root, datetime.now(timezone.utc), time.monotonic() + GENEROUS_BUDGET_SECONDS
+        )
+
+    assert check["status"] == "ok"
+    assert check["details"][counter] == 1
+    assert blocker in check["details"]["deletion_codes"]
+    released = doctor._queue_check(
+        state_root, datetime.now(timezone.utc), time.monotonic() + GENEROUS_BUDGET_SECONDS
+    )
+    assert released["details"][counter] == 0
+    assert blocker not in released["details"]["deletion_codes"]
+
+
+def _queue_parent_marker(state_root, role):
+    from operational_ownership import MarkerIdentity
+    from reliable_memory import capture_runtime_file_identity, sha256_bytes
+
+    if role == "doctor":
+        return None
+    name = "compile.pid" if role == "compile" else "maintenance.lock"
+    path = state_root / "run" / name
+    payload = f"{os.getpid()}\n".encode("ascii")
+    path.write_bytes(payload)
+    return MarkerIdentity(
+        relative_path=path.relative_to(state_root).as_posix(),
+        sha256=sha256_bytes(payload),
+        file_identity=capture_runtime_file_identity(path, state_root=state_root),
+        pid=os.getpid(),
+    )
+
+
+@pytest.mark.parametrize("parent_role", ["compile", "doctor", "nightly", "weekly"])
+def test_doctor_counts_the_queue_role_of_a_nested_owner(tmp_path, parent_role):
+    import doctor
+    from memory_queue import active_memory_queue
+
+    root, state_root, _home = _build_root(tmp_path)
+    _adopt(root, state_root)
+    queue = active_memory_queue(root, state_root)
+    registry = queue.ownership_registry()
+    parent = registry.acquire(
+        parent_role, scope="global", marker=_queue_parent_marker(state_root, parent_role)
+    )
+    try:
+        with queue.queue_owner(role="queue-worker", scope="worker", parent=parent):
+            check = doctor._queue_check(
+                state_root, datetime.now(timezone.utc), time.monotonic() + GENEROUS_BUDGET_SECONDS
+            )
+    finally:
+        registry.release(parent)
+
+    assert check["status"] == "ok"
+    assert check["details"]["live_workers"] == 1
+    assert "queue_worker_live" in check["details"]["deletion_codes"]
+
+
+@pytest.mark.parametrize("role,counter", [("worker", "live_workers"), ("migration", "live_migrations")])
+def test_doctor_still_reports_pre_adoption_queue_owners(tmp_path, role, counter):
+    import doctor
+
+    now = datetime.now(timezone.utc)
+    with sqlite3.connect(":memory:") as database:
+        database.row_factory = sqlite3.Row
+        database.execute("CREATE TABLE queue_ownership(role, token, pid, expires_at)")
+        database.execute(
+            "INSERT INTO queue_ownership VALUES (?, 'held', ?, ?)",
+            (role, os.getpid(), (now + timedelta(minutes=1)).isoformat()),
+        )
+        details, _states = doctor._empty_queue_details()
+        doctor._count_queue_ownership(database, {"queue_ownership"}, details, now)
+
+    assert details[counter] == 1
+    assert details["deletion_codes"] == []
+
+
+def test_doctor_rejects_an_incomplete_queue_owner_projection():
+    import doctor
+
+    with sqlite3.connect(":memory:") as database:
+        database.row_factory = sqlite3.Row
+        row = database.execute("SELECT 'held' AS owner_token").fetchone()
+        with pytest.raises(ValueError, match="queue owner columns are incomplete"):
+            doctor._queue_owner_observation(row)
+
+
 def test_an_adopted_vault_owes_no_v2_queue_migration(tmp_path, monkeypatch):
     """Adoption retires the v2 queue; the doctor must not wait for its marker.
 
