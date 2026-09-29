@@ -3163,6 +3163,9 @@ def apply_compile_plan(
     """Materialize and publish one validated plan as one Markdown transaction."""
     _require_apply_arguments(plan, inputs, action_key, batch, provider_budget)
     completed_at = completed_at or _utc_now()
+    claim_index = None
+    if _plan_carries_claims(_plan_operations(plan)):
+        claim_index = ClaimIndex(coordinator.state_root, vault=ROOT)
     if batch is not None:
         _preflight_v3_receipts(
             inputs,
@@ -3184,6 +3187,7 @@ def apply_compile_plan(
             completed_at=completed_at,
             deadline=deadline,
             cancelled=cancelled,
+            claim_index=claim_index,
         )
 
     return _published(
@@ -3294,6 +3298,7 @@ class _ApplyPlan:
         completed_at: str,
         deadline: float,
         cancelled: Callable[[], bool] | None,
+        claim_index: ClaimIndex | None,
     ) -> None:
         self.inputs = inputs
         self.action_key = action_key
@@ -3306,7 +3311,7 @@ class _ApplyPlan:
         self.cancelled = cancelled
         self.source_digests = sorted({item.sha256 for item in inputs.dailies})
         self.operations = _plan_operations(plan)
-        self.claim_index: ClaimIndex | None = None
+        self.claim_index = claim_index
         self.claim_tree_manifest: dict[str, object] | None = None
         self.claim_groups: list[tuple[ContradictionPipeline, tuple[object, ...]]] = []
         self.changes: list[MarkdownChange] = []
@@ -3326,7 +3331,6 @@ class _ApplyPlan:
         if not _plan_carries_claims(self.operations):
             return
         self.claim_tree_manifest = snapshot_claim_tree(ROOT)
-        self.claim_index = ClaimIndex(self.coordinator.state_root, vault=ROOT)
         self.claim_index.rebuild(self._claim_tree_paths)
         candidates: list[IndexedClaim] = []
         for planned in self.operations:

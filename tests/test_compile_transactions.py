@@ -918,6 +918,8 @@ def test_new_claim_page_inserted_after_assessment_fails_tree_manifest_preconditi
     daily = _daily(root)
     import compile_memory
 
+    rebuilds = _observe_claim_rebuilds(monkeypatch)
+
     new = _claim_record(
         root, claim_id="new", value="red",
         text="A durable exact-byte observation.", authority="user",
@@ -963,6 +965,21 @@ def test_new_claim_page_inserted_after_assessment_fails_tree_manifest_preconditi
 
     assert result.state == "committed"
     assert (root / "knowledge/notes/exact-byte-pattern.md").is_file()
+    assert (len(rebuilds), len(set(map(id, rebuilds)))) == (3, 1)
+
+
+def _observe_claim_rebuilds(monkeypatch):
+    from claims import ClaimIndex
+
+    original = ClaimIndex.rebuild
+    resolvers = []
+
+    def rebuild(index, *args, **kwargs):
+        resolvers.append(index.resolver)
+        return original(index, *args, **kwargs)
+
+    monkeypatch.setattr(ClaimIndex, "rebuild", rebuild)
+    return resolvers
 
 
 def test_a_tree_that_never_stops_moving_still_refuses_the_compile(vault, monkeypatch):

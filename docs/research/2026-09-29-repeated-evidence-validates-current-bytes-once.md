@@ -71,3 +71,36 @@ findings are zero. Lint still exits 1 with `--fail-on-findings` because 23 spars
 notes and one stale compiled day remain; this is not a claim of a clean vault.
 Installation is recorded separately in the private acceptance report. No historical evidence hash or
 source content is rewritten and no security check is relaxed.
+
+## Publication retries use the same validated evidence memo
+
+The live post-install compile exposed the same repeated work in publication:
+`apply_compile_plan` recreated `ClaimIndex` and its resolver for every `_ApplyPlan`
+attempt. Each attempt correctly took a fresh claim-tree manifest and rebuilt the
+claims projection, but also searched all unchanged historical evidence again.
+An actively updated project page invalidated three attempts before each of two
+commits. A temporary derived index reading the real vault measured 44.164 seconds
+for a fresh resolver and 0.255 seconds for a second full rebuild using that
+resolver; both had zero diagnostics.
+
+The three primary sources above were checked again on 2026-09-29. The selected
+change scopes one `ClaimIndex` to one `apply_compile_plan` call. Every attempt
+still snapshots the current tree, rereads every page, rebuilds all claims, and
+validates the manifest at publication. Only the resolver's content-validated
+historical searches survive between attempts and the post-commit rebuild.
+Plans without claims still create no claims index. This also applies when a
+previously started compile is resumed through its persisted receipts: the call
+starts with a fresh index, not persisted cached evidence.
+
+Keeping separate resolvers wastes the measured work. Holding the writer gate
+through the expensive assessment blocks capture. Ignoring project updates would
+accept stale assessments. Sharing the existing index within a single publication
+call avoids all three without a new cache, persistent state, dependency, or limit.
+Its memory cost remains bounded by the evidence actually requested for current
+daily versions during that call.
+
+The real claim-tree race regression still inserts a claim after assessment and
+requires a fresh successful retry. It now additionally records three full index
+rebuilds using one resolver. The old code performs those rebuilds with two
+resolvers and fails that assertion. The continuously moving tree test must still
+refuse publication, and existing source-tamper and no-claims cases remain required.
