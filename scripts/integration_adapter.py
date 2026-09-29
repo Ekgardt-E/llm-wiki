@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from functools import partial
@@ -2699,6 +2699,70 @@ def _require_stable_transcript(before: os.stat_result, after: os.stat_result) ->
         raise ValueError("capture transcript changed while it was read")
 
 
+def _require_transcript_growth(before: os.stat_result, after: os.stat_result) -> None:
+    if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+        raise ValueError("capture transcript changed while it was read")
+    if after.st_size <= before.st_size:
+        raise ValueError("capture transcript changed while it was read")
+
+
+def _verified_capture_windows(
+    descriptor: int,
+    before: os.stat_result,
+    spans: Sequence[tuple[int, int]],
+    windows: list[bytes],
+) -> None:
+    """Accept growth only when the original windows match a stable second read."""
+    after = os.fstat(descriptor)
+    try:
+        _require_stable_transcript(before, after)
+    except ValueError:
+        _require_transcript_growth(before, after)
+    verified = [_read_transcript_edge(descriptor, offset, size) for offset, size in spans]
+    _require_stable_transcript(after, os.fstat(descriptor))
+    if verified != windows:
+        raise ValueError("capture transcript changed while it was read")
+
+
+def _read_capture_windows(
+    path: Path, span_builder: Callable[[int], Sequence[tuple[int, int]]]
+) -> tuple[list[bytes], int]:
+    from bounded_io import (
+        _file_identity,
+        _require_opened_identity,
+        _require_regular_file,
+        _require_safe_ancestors,
+        _require_same_file_at_path,
+    )
+
+    label = "capture transcript"
+    _require_safe_ancestors(path, label, None)
+    before = path.lstat()
+    _require_regular_file(path, before, label)
+    spans = span_builder(before.st_size)
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        _require_opened_identity(descriptor, _file_identity(before), label)
+        windows = [_read_transcript_edge(descriptor, offset, size) for offset, size in spans]
+        _verified_capture_windows(descriptor, before, spans, windows)
+        _require_same_file_at_path(path, _file_identity(before), label)
+        return windows, before.st_size
+    finally:
+        os.close(descriptor)
+
+
+def _transcript_prefix_span(size: int, limit: int) -> tuple[tuple[int, int], ...]:
+    if size > limit:
+        raise ValueError(f"capture transcript exceeds {limit} bytes")
+    return ((0, size),)
+
+
+def _transcript_edge_spans(size: int, side: int) -> tuple[tuple[int, int], ...]:
+    scan = min(side * EDGE_SCAN_WINDOWS, size // 2)
+    return ((0, scan), (size - scan, scan))
+
+
 # How far past its window an edge of a long transcript is searched for turns. A
 # session's head can be all `file-history-snapshot` records; measured on this
 # machine on 2026-09-26, two of six transcripts over the capture bound held no
@@ -2710,17 +2774,9 @@ EDGE_SCAN_WINDOWS = 16
 
 def _read_transcript_edges(path: Path, side: int) -> tuple[bytes, bytes, int]:
     """Head and tail of a transcript too large to hold whole, each of its turns."""
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
-    try:
-        before = os.fstat(descriptor)
-        scan = min(side * EDGE_SCAN_WINDOWS, before.st_size // 2)
-        head = _read_transcript_edge(descriptor, 0, scan)
-        tail = _read_transcript_edge(descriptor, before.st_size - scan, scan)
-        _require_stable_transcript(before, os.fstat(descriptor))
-    finally:
-        os.close(descriptor)
-    return _turns_head(head, side), _turns_tail(tail, side), before.st_size
+    windows, size = _read_capture_windows(path, lambda size: _transcript_edge_spans(size, side))
+    head, tail = windows
+    return _turns_head(head, side), _turns_tail(tail, side), size
 
 
 def _turn_lines(lines: Iterable[bytes], side: int) -> list[bytes]:
@@ -2812,11 +2868,10 @@ def _capture_transcript_text(path: Path, limit: int = MAX_CAPTURE_EVIDENCE_BYTES
     `limit` is the bound this read keeps to; it is lowered when the text grew too
     much inside its JSON record (`_fitting_capture_record`).
     """
-    from bounded_io import read_stable_bytes
-
     if path.stat().st_size > limit:
         return _capture_excerpt_text(path, limit)
-    return _evidence_text(read_stable_bytes(path, limit, label="capture transcript"))
+    windows, _size = _read_capture_windows(path, lambda size: _transcript_prefix_span(size, limit))
+    return _evidence_text(windows[0])
 
 
 def _capture_path_evidence(
