@@ -2298,13 +2298,32 @@ def inspect_installed_vault(*, root: Path, state_root: Path) -> dict[str, object
     """Run bounded Reliability V3 validation without creating or mutating state."""
     try:
         return _inspect_installed_vault(root=Path(root), state_root=Path(state_root))
-    except Exception:  # noqa: BLE001 - closed read-only inspection envelope
+    except Exception as error:  # noqa: BLE001 - closed read-only inspection envelope
+        return _inspection_failure(error)
+
+
+def _inspection_failure(error: Exception) -> dict[str, object]:
+    if _database_contention(error):
         return _report(
-            mode="check",
-            status="error",
-            state="conflict",
-            blockers=["reliability_v3_record_invalid"],
+            mode="check", status="error", state="busy",
+            blockers=["operational_database_busy"],
         )
+    return _report(
+        mode="check", status="error", state="conflict",
+        blockers=["reliability_v3_record_invalid"],
+    )
+
+
+def _database_contention(error: Exception) -> bool:
+    if not isinstance(error, sqlite3.OperationalError):
+        return False
+    code = getattr(error, "sqlite_errorcode", None)
+    if isinstance(code, int):
+        return code & 0xFF in (5, 6)  # SQLite's stable BUSY and LOCKED primary codes.
+    # Python 3.10 predates sqlite_errorcode; recognize only SQLite's lock errors.
+    return str(error) in {
+        "database is locked", "database table is locked", "database schema is locked",
+    }
 
 
 def _inspect_installed_vault(*, root: Path, state_root: Path) -> dict[str, object]:

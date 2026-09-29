@@ -5033,6 +5033,16 @@ def _adoption_state(root: Path, state_root: Path) -> str:
 
 def _capture_disabled_message(adoption: str) -> str:
     """Plain words for what issue #17 found buried in a failure log: no capture until adoption."""
+    if adoption == "busy":
+        return (
+            "Capture readiness could not be checked because an operational database is busy. "
+            "Retry the health check after the active database transaction finishes."
+        )
+    if adoption == "conflict":
+        return (
+            "Capture readiness could not be verified because adoption inspection found a conflict. "
+            "Inspect it with uv run --locked --no-sync python scripts/repair_installed_memory.py --check."
+        )
     return (
         f"Session capture is disabled: Reliability V3 state is '{adoption}'. Run "
         "uv run --locked --no-sync python scripts/repair_installed_memory.py "
