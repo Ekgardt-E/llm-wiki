@@ -7,13 +7,14 @@ from datetime import datetime, timezone
 
 import doctor
 import pytest
+from reliable_memory import _harden_runtime_owner_only
 
 
 def _rows(root, *, state="succeeded", digest_ok=True, same_input=True):
     result = root / "run/queue-results/result.json"
     result.parent.mkdir(parents=True)
     result.write_bytes(b'{"result":"accepted"}')
-    result.chmod(0o600)
+    _harden_runtime_owner_only(result, 0o600)
     digest = hashlib.sha256(result.read_bytes()).hexdigest()
     database = sqlite3.connect(":memory:")
     database.row_factory = sqlite3.Row
