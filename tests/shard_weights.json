@@ -354,7 +354,7 @@
   "test_both_recovery_passes_look_past_a_bad_head.py": 1.33,
   "test_bounded_io.py": 0.02,
   "test_build_tiers.py": 0.6,
-  "test_capture_diagnostics.py": 1.23,
+  "test_capture_diagnostics.py": 0.39,
   "test_capture_failure_is_recorded.py": 0.03,
   "test_capture_failure_trail_names_the_event.py": 0.01,
   "test_capture_hooks.py": 7.69,

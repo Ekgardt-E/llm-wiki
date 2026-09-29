@@ -49,6 +49,42 @@ def test_failure_is_recorded_in_trail_and_counter(diagnostics):
     assert state["capture_failures"]["user_prompt_append"]["count"] == 1
 
 
+def _writer_timeout():
+    private_payload = "session-content-must-not-be-logged"
+    assert private_payload
+    raise TimeoutError("transaction mutation deadline or cancellation reached")
+
+
+def _adoption_timeout():
+    raise TimeoutError("transaction mutation deadline or cancellation reached")
+
+
+@pytest.mark.parametrize("failure", [_writer_timeout, _adoption_timeout])
+def test_failure_call_path_identifies_stage_without_payload(diagnostics, failure):
+    module, _ = diagnostics
+    try:
+        failure()
+    except TimeoutError as error:
+        module.record_capture_failure("post_tool_append", str(error), error=error)
+
+    written = module.FAILURE_LOG.read_text(encoding="utf-8")
+    entry = json.loads(written)
+    frames = entry["call_path"].split(" > ")
+    assert frames[-1].split(":")[0] == failure.__name__
+    assert frames[-1].split(":")[1].isdigit()
+    assert "session-content-must-not-be-logged" not in written
+    assert __file__ not in written
+    assert "raise TimeoutError" not in written
+
+
+@pytest.mark.parametrize("error", [None, TimeoutError("not raised")])
+def test_failure_without_traceback_keeps_empty_call_path(diagnostics, error):
+    module, _ = diagnostics
+    module.record_capture_failure("post_tool_append", "timeout", error=error)
+    entry = json.loads(module.FAILURE_LOG.read_text(encoding="utf-8"))
+    assert entry["call_path"] == ""
+
+
 def test_counter_accumulates_and_surfaces_a_session_line(diagnostics):
     module, state = diagnostics
 

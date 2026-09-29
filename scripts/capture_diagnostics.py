@@ -416,6 +416,18 @@ def _object_or_recorded(value: object, kind: str) -> dict:
     return {}
 
 
+def _failure_call_path(error: BaseException | None) -> str:
+    """Identify the failing stage without locals, source text, or file paths."""
+    if error is None:
+        return ""
+    frames: list[str] = []
+    frame = error.__traceback__
+    while frame is not None:
+        frames.append(f"{frame.tb_frame.f_code.co_name}:{frame.tb_lineno}")
+        frame = frame.tb_next
+    return " > ".join(frames)
+
+
 def record_capture_failure(
     kind: str,
     reason: str,
@@ -430,6 +442,7 @@ def record_capture_failure(
     deferred by a writer race; without it, a failure is a loss.
     """
     record = _failure_record(kind, reason, slug, session_id, _outcome_of(error, kind))
+    record["call_path"] = _failure_call_path(error)
     written: list[bool] = []
 
     def _under_the_state_lock(state: dict) -> None:
