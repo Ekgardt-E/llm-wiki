@@ -1,3 +1,4 @@
+import pytest
 
 
 def test_the_prefixes_a_2026_scanner_catches_are_redacted():
@@ -155,3 +156,35 @@ def test_a_bad_timeout_override_is_refused_by_name(monkeypatch):
         llm_client._timeout_s()
     monkeypatch.setenv("MEMORY_LLM_TIMEOUT_S", "45")
     assert llm_client._timeout_s() == 45
+
+
+@pytest.mark.parametrize("suffix", ["", ")", "]", "}", "`", "``", "`)", "))"])
+@pytest.mark.parametrize("prefix", ["https://example.invalid/?token=", "--password="])
+def test_redacted_values_keep_their_closing_markup(prefix, suffix):
+    from model_dlp import DLPPolicy, require_safe_model_output
+    from secret_redact import redact_secrets
+
+    text = prefix + "[REDACTED]" + suffix
+    assert redact_secrets(text) == text
+    require_safe_model_output(text, DLPPolicy())
+
+
+@pytest.mark.parametrize("value", ["freshCredential123", "[REDACTED]freshCredential123", "[REDACTED])freshCredential123"])
+def test_a_redaction_marker_does_not_hide_more_credential_text(value):
+    from model_dlp import DLPContentBlocked, DLPPolicy, require_safe_model_output
+    from secret_redact import redact_secrets
+
+    text = "https://example.invalid/?token=" + value
+    assert value not in redact_secrets(text)
+    with pytest.raises(DLPContentBlocked):
+        require_safe_model_output(text, DLPPolicy())
+
+
+def test_a_redacted_source_quote_survives_transport_and_immutable_validation():
+    from compile_memory import _sole_quote_offset
+    from model_dlp import DLPPolicy, redact_for_transport, require_safe_model_output
+
+    line = "A previously redacted endpoint (`https://example.invalid/?token=[REDACTED]`) was logged."
+    transported = redact_for_transport(line, DLPPolicy())
+    assert _sole_quote_offset(line.encode(), transported.encode()) == 0
+    require_safe_model_output(transported, DLPPolicy())

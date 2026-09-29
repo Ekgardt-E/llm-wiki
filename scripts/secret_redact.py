@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from functools import partial
 
 # A credential-named key followed by a value. The name alone decides nothing:
 # `lease_token: str` is a type annotation, `token = next(iterator)` is an
@@ -192,8 +193,23 @@ def _shannon_entropy(data: str) -> float:
 def _redact_patterns(text: str) -> str:
     out = text
     for pattern, replacement in _PATTERNS:
-        out = pattern.sub(replacement, out)
+        out = pattern.sub(partial(_pattern_replacement, replacement=replacement), out)
     return out
+
+
+def _pattern_replacement(match: re.Match[str], *, replacement: str) -> str:
+    """An existing marker followed only by closing markup is already redacted.
+
+    Query and command-value matches include closing Markdown/code delimiters.
+    Consuming them after `[REDACTED]` changes safe source lines on transport and
+    makes the output DLP reject their quotations. Additional credential text
+    is still replaced: the suffix may contain only closing brackets/backticks.
+    """
+    redacted = match.expand(replacement)
+    original = match.group()
+    if original.startswith(redacted) and not original[len(redacted):].strip(")]}`"):
+        return original
+    return redacted
 
 
 def _value_is_code(value: str, quoted: bool) -> bool:
