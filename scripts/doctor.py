@@ -2733,14 +2733,11 @@ def _run_deletion_check(
     collected: dict[str, dict] | None = None,
 ) -> dict:
     """Return an immediate, non-permitting observation of adopted runtime state."""
-    del collected
     from installed_memory_repair import (
         ReliabilityV3ValidationError,
         require_reliability_v3_adopted,
         validate_reliability_v3_runtime,
     )
-    from operational_ownership import OperationalOwnershipError, OwnershipRegistry
-
     state_path = Path(state_root)
     root_path = _deletion_root(root, state_path)
     try:
@@ -2749,6 +2746,40 @@ def _run_deletion_check(
         return _deletion_snapshot([exc.code])
 
     snapshot_deadline = min(deadline, time.monotonic() + 20.0)
+    if _deadline_reached(snapshot_deadline):
+        return _deletion_snapshot(["run_deletion_state_unknown"])
+    codes = _retained_runtime_observation(
+        collected, root_path, state_path, now, snapshot_deadline,
+        validate_reliability_v3_runtime,
+    )
+    if codes:
+        return _deletion_snapshot(codes)
+    return _exclusive_deletion_snapshot(
+        root_path, state_path, now, snapshot_deadline, validate_reliability_v3_runtime,
+    )
+
+
+def _retained_runtime_observation(
+    collected, root_path: Path, state_path: Path, now: datetime, deadline: float, validate,
+) -> list[str]:
+    """Revalidate known retention without excluding writers; never prove quiescence.
+
+    A prior blocker is only a hint to try the read-only validator. If it disappeared,
+    the exclusive path still has to establish a coherent empty snapshot.
+    """
+    checks = (collected or {}).values()
+    if not any(_derived_deletion_codes(check) for check in checks):
+        return []
+    return _observed_deletion_codes(
+        root_path, state_path, now, deadline, None, validate,
+    )
+
+
+def _exclusive_deletion_snapshot(
+    root_path: Path, state_path: Path, now: datetime, snapshot_deadline: float, validate,
+) -> dict:
+    from operational_ownership import OperationalOwnershipError, OwnershipRegistry
+
     if _deadline_reached(snapshot_deadline):
         return _deletion_snapshot(["run_deletion_state_unknown"])
     registry = OwnershipRegistry._from_adopted_database(  # noqa: SLF001
@@ -2769,7 +2800,7 @@ def _run_deletion_check(
             state_path,
             now,
             snapshot_deadline,
-            validate_reliability_v3_runtime,
+            validate,
         )
     )
 
