@@ -1880,6 +1880,30 @@ def test_a_log_outside_the_prompt_is_appended_to_rather_than_rewritten(vault):
     assert inputs.dailies[0].sha256.encode() in log
 
 
+def test_saved_plan_with_malformed_prose_evidence_is_refused_before_publication(vault):
+    root, state_root = vault
+    daily = _daily(root)
+    import compile_memory
+
+    inputs = compile_memory.snapshot_compile_inputs([daily])
+    plan = _semantic_plan()
+    operation = plan["operations"][0]
+    content = json.loads(operation["content"])
+    content["body_markdown"] += "\n\n## Evidence\n- `daily:2026-07-14 10:00:00`"
+    operation["content"] = canonical_json_bytes(content).decode("utf-8")
+    before_index = (root / "knowledge/index.md").read_bytes()
+
+    with pytest.raises(ValueError, match="evidence reference is not canonical"):
+        compile_memory.apply_compile_plan(
+            _narrowed(inputs), plan, action_key="e" * 64, trigger="manual",
+            coordinator=MarkdownCoordinator(root, state_root), completed_at="2026-07-14T12:00:00Z",
+        )
+
+    assert not (root / operation["path"]).exists()
+    assert not list((root / "knowledge/daily/receipts").glob("*.md"))
+    assert (root / "knowledge/index.md").read_bytes() == before_index
+
+
 def test_an_absent_index_and_log_are_still_created(vault):
     """Nothing on disk means create, which is how a fresh vault compiles."""
     root, state_root = vault

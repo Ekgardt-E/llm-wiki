@@ -76,6 +76,7 @@ from evidence_resolver import (  # noqa: E402
     EvidenceResolver,
     _daily_part_bounds,
     daily_entries,
+    extract_evidence_references,
 )
 from iso_time import block_instant  # noqa: E402
 from llm_client import (  # noqa: E402
@@ -208,7 +209,12 @@ CRITIQUE_PROGRAM = (
     "compile-critique/v3: specificity durability evidence completeness, "
     "one verdict for every operation"
 )
-DRAFT_SYSTEM = "You are a skeptical memory editor. Return only the requested JSON."
+DRAFT_SYSTEM = (
+    "You are a skeptical memory editor. Return only the requested JSON. "
+    "Put source quotations in the evidence array. The renderer supplies the Evidence "
+    "and Related sections and derives canonical source references; do not invent "
+    "daily: citations in prose."
+)
 CRITIQUE_SYSTEM = "You are a strict memory-plan critic. Return only the requested JSON."
 RAW_PLAN_SCHEMA = {
     "type": "object",
@@ -2028,6 +2034,7 @@ def _validate_semantic_operation(
     evidence = operation["evidence"]
     _require_evidence_shape(evidence)
     bound = [_bound_evidence_block(item, inputs) for item in evidence]
+    _require_rendered_evidence(operation, inputs, [binding["reference"] for binding, _block in bound])
     _require_claims(operation, inputs)
     normalized = json.loads(canonical_json_bytes(operation))
     assert isinstance(normalized, dict)
@@ -2621,17 +2628,30 @@ def _require_resolved_claim_evidence(
     claim_evidence: Mapping[str, object], inputs: CompileInputs
 ) -> None:
     reference = EvidenceRef.parse(claim_evidence["reference"])
+    resolved = _resolve_compile_reference(reference, inputs)
+    _require_literal_match(resolved, claim_evidence)
+
+
+def _resolve_compile_reference(reference: EvidenceRef, inputs: CompileInputs):
     source = _daily_for_evidence(
         inputs, reference.daily_id, reference.source_sha256
     )
     if source is None:
         raise ValueError("compile claim evidence source is absent from the snapshot")
-    resolved = EvidenceResolver(ROOT).resolve_bytes(
+    return EvidenceResolver(ROOT).resolve_bytes(
         reference,
         source.content,
         source_path=ROOT / source.logical_path,
     )
-    _require_literal_match(resolved, claim_evidence)
+
+
+def _require_rendered_evidence(
+    operation: dict[str, object], inputs: CompileInputs, references: Sequence[str]
+) -> None:
+    """Validate model prose with the same parser that reads the published page."""
+    rendered = _render_page(operation, "", references).decode("utf-8")
+    for reference in extract_evidence_references(rendered):
+        _resolve_compile_reference(reference, inputs)
 
 
 def _require_literal_match(
