@@ -2231,6 +2231,7 @@ class BatchOutcome:
     status: int
     outcome: str | None = None
     paths: int = 0
+    error: str | None = None
 
 
 def _committed_outcome(result: CompileApplyResult) -> BatchOutcome:
@@ -4603,7 +4604,9 @@ def _run(
         batches = pack_compile_batches(inputs, model=None)
     except Exception as exc:  # noqa: BLE001 - provider/cache boundary is fail-closed
         _require_compile_active(deadline, cancelled)
-        return _failed_compile(args, inputs, exc)
+        status = _failed_compile(args, inputs, exc)
+        _mark_error_unless_dry(args, exc)
+        return status
 
     outcomes: list[BatchOutcome] = []
     for batch in batches:
@@ -4629,11 +4632,21 @@ def _finish_run(args: argparse.Namespace, outcomes: Sequence[BatchOutcome]) -> i
     """Exit 1 when any batch failed (its failure is already recorded), else mark the run ok."""
     failed = [item for item in outcomes if item.status != 0]
     if failed:
-        print(f"compile_memory: {len(failed)} batch(es) failed; the rest: {_outcome_sentence(outcomes)}.")
-        return 1
+        return _finish_failed_run(args, outcomes, failed)
     _mark_ok_unless_dry(args, outcomes=outcomes)
     print(f"compile_memory: done: {_outcome_sentence(outcomes)}.")
     return 0
+
+
+def _finish_failed_run(
+    args: argparse.Namespace, outcomes: Sequence[BatchOutcome], failed: Sequence[BatchOutcome]
+) -> int:
+    reasons = "; ".join(item.error or item.outcome or "unknown failure" for item in failed)
+    message = f"{len(failed)} batch(es) failed: {reasons}"
+    if not args.dry_run:
+        _mark_finished(args.trigger, "error", message, outcomes=outcomes)
+    print(f"compile_memory: {message}; the rest: {_outcome_sentence(outcomes)}.")
+    return 1
 
 
 def _announce_compile(args: argparse.Namespace, dailies: Sequence[Path]) -> None:
@@ -4652,10 +4665,17 @@ def _failed_compile(
 ) -> int:
     """Record the failure against every source in the batch; the run reports it at the end."""
     error = f"{type(exc).__name__}: {exc}"
-    _record_compile_source_failures(inputs, STATE_ROOT, error_code=type(exc).__name__)
+    if not args.dry_run:
+        _record_compile_source_failures(inputs, STATE_ROOT, error_code=type(exc).__name__)
     print(f"compile_memory: FAILED — {prefix}{error}")
-    _mark_finished(args.trigger, "error", error)
     return 1
+
+
+def _failed_batch(
+    args: argparse.Namespace, inputs: CompileInputs, exc: BaseException, *, prefix: str = ""
+) -> BatchOutcome:
+    status = _failed_compile(args, inputs, exc, prefix=prefix)
+    return BatchOutcome(status, error=f"{type(exc).__name__}: {exc}")
 
 
 def _run_batch(
@@ -4677,7 +4697,7 @@ def _run_batch(
         )
     except Exception as exc:  # noqa: BLE001 - provider/cache boundary is fail-closed
         _require_compile_active(deadline, cancelled)
-        return BatchOutcome(_failed_compile(args, batch.inputs, exc))
+        return _failed_batch(args, batch.inputs, exc)
 
     _require_compile_active(deadline, cancelled)
     if args.dry_run:
@@ -4725,9 +4745,7 @@ def _apply_batch(
     except CandidatesAlreadyQuarantined as already:
         return _still_quarantined_outcome(already)
     except Exception as exc:  # noqa: BLE001 - no diagnostic state is a commit receipt
-        return BatchOutcome(
-            _failed_compile(args, batch.inputs, exc, prefix="transaction not committed: ")
-        )
+        return _failed_batch(args, batch.inputs, exc, prefix="transaction not committed: ")
     _require_compile_active(deadline, cancelled)
     _record_batch_diagnostics(batch, result, args, coordinator)
     return _committed_outcome(result)

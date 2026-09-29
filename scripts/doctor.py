@@ -8355,7 +8355,6 @@ def _repair_or_record(name: str, action, context: _RepairContext) -> None:
         context.repair_errors.setdefault(name, []).append(
             f"{name} repair failed: {describe_error(exc)}"
         )
-        context.repair_deferred.update(_DEFERRED_BY_ACTION[name])
 
 
 def _repair_state_actions(
@@ -8713,11 +8712,21 @@ def _mark_repair_failed(check: dict, errors: list[str]) -> None:
     check["details"]["repair_errors"] = errors
 
 
+def _repair_errors_for_check(check_id: str, context: _RepairContext) -> list[str]:
+    """Repair actions and public check IDs have different names."""
+    return [
+        error
+        for action, errors in context.repair_errors.items()
+        if check_id in _DEFERRED_BY_ACTION[action]
+        for error in errors
+    ]
+
+
 def _apply_repair_outcomes(checks: list[dict], context: _RepairContext) -> None:
     for check in checks:
         if check["id"] in context.repair_deferred:
             _mark_repair_deferred(check)
-        errors = context.repair_errors.get(check["id"])
+        errors = _repair_errors_for_check(check["id"], context)
         if errors:
             _mark_repair_failed(check, errors)
 
