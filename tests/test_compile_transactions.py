@@ -2286,3 +2286,72 @@ def test_a_quarantined_batch_is_named_apart_from_a_published_one(capsys):
         compile_memory.compile_outcome([first, second]),
         compile_memory._finished_outcome("error", [second]),
     ) == ("quarantined", "partial", "failed")
+
+
+def _hold_writer_in_other_process(root, state_root, connection):
+    coordinator = MarkdownCoordinator(root, state_root)
+    with coordinator.writer_gate():
+        connection.send('held')
+        connection.recv()
+    connection.close()
+
+
+def _finish_other_writer(process, connection):
+    from tests.slow_machine import LONG_TIMEOUT
+
+    if process.is_alive():
+        connection.send('release')
+    process.join(LONG_TIMEOUT)
+    connection.close()
+    if process.is_alive():
+        process.kill()
+        process.join(LONG_TIMEOUT)
+        pytest.fail('writer child did not stop')
+
+
+@contextmanager
+def _other_process_writer(root, state_root):
+    import multiprocessing
+
+    from tests.slow_machine import LONG_TIMEOUT
+
+    context = multiprocessing.get_context('spawn')
+    parent, child = context.Pipe()
+    process = context.Process(target=_hold_writer_in_other_process, args=(root, state_root, child))
+    process.start()
+    child.close()
+    try:
+        assert parent.poll(LONG_TIMEOUT), 'writer child did not become ready'
+        assert parent.recv() == 'held'
+        yield
+    finally:
+        _finish_other_writer(process, parent)
+
+
+def test_external_planning_does_not_own_another_process_writer_gate(vault, monkeypatch):
+    import compile_memory
+
+    root, state_root = vault
+    inputs = compile_memory.snapshot_compile_inputs([_daily(root)])
+    provider = _provider()
+    responses = [_draft_response(), _pass_review()]
+    monkeypatch.setattr(compile_memory, "provider_candidates", lambda *a, **k: [provider])
+    monkeypatch.setattr(compile_memory, "probe_candidate", lambda descriptor: True)
+    monkeypatch.setattr(compile_memory, "call_candidate", lambda descriptor, *a, **k:
+                        LLMResult(descriptor, responses.pop(0), True, None, "native"))
+    coordinator = MarkdownCoordinator(root, state_root)
+    with _other_process_writer(root, state_root):
+        resolved = compile_memory.resolve_compile_plan(inputs, CompileCache(state_root), coordinator=coordinator)
+    assert resolved.plan["operations"]
+    assert responses == []
+
+
+def test_external_planning_rejects_own_persisted_gate_through_another_coordinator(vault):
+    import compile_memory
+
+    root, state_root = vault
+    owner = MarkdownCoordinator(root, state_root)
+    other = MarkdownCoordinator(root, state_root)
+    with owner.writer_gate():
+        with pytest.raises(RuntimeError, match='persisted writer ownership'):
+            compile_memory._assert_external_work_allowed(other)

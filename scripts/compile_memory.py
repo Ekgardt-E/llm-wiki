@@ -1557,7 +1557,8 @@ def _assert_external_work_allowed(coordinator: MarkdownCoordinator) -> None:
     coordinator.assert_external_work_allowed()
     with coordinator._connect() as database:
         owner = database.execute(
-            "SELECT owner_token FROM writer_owners WHERE gate_name = 'global'"
+            "SELECT owner_token FROM writer_owners WHERE gate_name = 'global' AND process_id = ?",
+            (os.getpid(),),
         ).fetchone()
     if owner is not None:
         raise RuntimeError("external LLM work is forbidden during persisted writer ownership")
