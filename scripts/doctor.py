@@ -967,7 +967,7 @@ def _undo_artifact_retained(
 
 
 def _collect_error_code(
-    database: sqlite3.Connection,
+    error_codes: Mapping[str, str],
     row: sqlite3.Row,
     state: str,
     transaction_columns: set[str],
@@ -977,15 +977,13 @@ def _collect_error_code(
         "error_code" not in transaction_columns
     ):
         return
-    code_row = database.execute(
-        'SELECT error_code FROM "transaction" WHERE id=?', (row["id"],)
-    ).fetchone()
-    if code_row is not None and code_row[0]:
-        codes.add(str(code_row[0]))
+    code = error_codes.get(row["id"])
+    if code:
+        codes.add(code)
 
 
 def _scan_one_transaction_row(
-    database: sqlite3.Connection,
+    error_codes: Mapping[str, str],
     row: sqlite3.Row,
     *,
     states: dict[str, int],
@@ -1003,7 +1001,7 @@ def _scan_one_transaction_row(
         details["state_invalid"] = True
         return False
     states[state] += 1
-    _collect_error_code(database, row, state, transaction_columns, codes)
+    _collect_error_code(error_codes, row, state, transaction_columns, codes)
     if _undo_artifact_retained(row, state, cutoff, state_root):
         details["undo_retained"] += 1
     return _transaction_row_corrupt(row, state, operation_positions)
@@ -1018,7 +1016,7 @@ class _RowVerdict(NamedTuple):
 
 
 def _scan_transaction_rows(
-    database: sqlite3.Connection,
+    error_codes: Mapping[str, str],
     transaction_rows: Iterator[sqlite3.Row],
     operation_positions: dict[str, list[int]],
     transaction_columns: set[str],
@@ -1035,7 +1033,7 @@ def _scan_transaction_rows(
     cutoff = now - timedelta(days=UNDO_RETENTION_DAYS)
     for row in transaction_rows:
         corrupt = _scan_one_transaction_row(
-            database,
+            error_codes,
             row,
             states=states,
             details=details,
@@ -1225,14 +1223,54 @@ def _one_snapshot(database: sqlite3.Connection) -> Iterator[None]:
     The read connection autocommits, so each statement saw its own state: a
     transaction committed between the reads showed up as a row with no operations,
     or an operation of an unknown transaction, and was called corrupt. One read
-    transaction holds SQLite's shared lock for the scan (0.63 s on the installed
-    vault); writers wait within their busy timeout rather than being misread.
+    transaction holds SQLite's shared lock only while obtaining the rows.
+    Filesystem inspection and row validation happen after releasing that lock.
     """
     database.execute("BEGIN")
     try:
         yield
     finally:
         database.execute("COMMIT")
+
+
+class _TransactionScanSnapshot(NamedTuple):
+    known_ids: set[str]
+    positions: dict[str, list[int]]
+    operations_corrupt: bool
+    rows: list[sqlite3.Row]
+    error_codes: dict[str, str]
+
+
+def _transaction_error_codes(
+    database: sqlite3.Connection, columns: set[str], deadline: float
+) -> dict[str, str]:
+    if "error_code" not in columns:
+        return {}
+    rows = _streamed_rows(
+        database, 'SELECT id, error_code FROM "transaction" WHERE error_code IS NOT NULL', deadline
+    )
+    return {row[0]: str(row[1]) for row in rows if row[1]}
+
+
+def _transaction_scan_snapshot(
+    database: sqlite3.Connection, columns: set[str], deadline: float
+) -> _TransactionScanSnapshot:
+    with _one_snapshot(database):
+        known_ids = _transaction_ids(database, deadline)
+        positions, corrupt = _operation_positions(
+            _streamed_rows(database, _OPERATION_QUERY, deadline), known_ids
+        )
+        rows = list(_streamed_rows(database, _TRANSACTION_QUERY, deadline))
+        errors = _transaction_error_codes(database, columns, deadline)
+    return _TransactionScanSnapshot(known_ids, positions, corrupt, rows, errors)
+
+
+def _checked_snapshot_rows(
+    rows: Sequence[sqlite3.Row], deadline: float
+) -> Iterator[sqlite3.Row]:
+    for row in rows:
+        _stop_at(deadline)
+        yield row
 
 
 def _scan_transaction_tables(
@@ -1246,27 +1284,23 @@ def _scan_transaction_tables(
     details: dict,
     states: dict[str, int],
 ) -> None:
-    """Every transaction and operation row, streamed; nothing is judged from a sample."""
-    with _one_snapshot(database):
-        known_ids = _transaction_ids(database, deadline)
-        operation_positions, operations_corrupt = _operation_positions(
-            _streamed_rows(database, _OPERATION_QUERY, deadline), known_ids
-        )
-        verdict = _scan_transaction_rows(
-            database,
-            _streamed_rows(database, _TRANSACTION_QUERY, deadline),
-            operation_positions,
-            transaction_columns,
-            artifacts=_checked_artifacts(state_root, known_ids, details, deadline),
-            known_ids=known_ids,
-            state_root=state_root,
-            now=now,
-            details=details,
-            states=states,
-        )
+    """Judge every row from one SQL snapshot without locking writers during file I/O."""
+    snapshot = _transaction_scan_snapshot(database, transaction_columns, deadline)
+    verdict = _scan_transaction_rows(
+        snapshot.error_codes,
+        _checked_snapshot_rows(snapshot.rows, deadline),
+        snapshot.positions,
+        transaction_columns,
+        artifacts=_checked_artifacts(state_root, snapshot.known_ids, details, deadline),
+        known_ids=snapshot.known_ids,
+        state_root=state_root,
+        now=now,
+        details=details,
+        states=states,
+    )
     details["codes"] = sorted(set(details["codes"]) | verdict.codes)
     _count_owner_tables(database, tables, details, now)
-    if operations_corrupt or verdict.corrupt or verdict.artifacts_mismatched:
+    if snapshot.operations_corrupt or verdict.corrupt or verdict.artifacts_mismatched:
         _mark_corrupt(details)
 
 

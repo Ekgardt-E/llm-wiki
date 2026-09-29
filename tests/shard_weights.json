@@ -422,7 +422,7 @@
   "test_dependency_environments.py": 0.05,
   "test_dlp_finding_allowlist.py": 0.02,
   "test_doctor.py": 12.1,
-  "test_doctor_bounded_scan_truth.py": 7.13,
+  "test_doctor_bounded_scan_truth.py": 7.38,
   "test_doctor_checkpoint_lineage.py": 0.01,
   "test_doctor_knows_the_abort_states.py": 0.0,
   "test_doctor_maintenance_owner_v3.py": 38.31,

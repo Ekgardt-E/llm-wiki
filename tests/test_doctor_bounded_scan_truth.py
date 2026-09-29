@@ -341,3 +341,42 @@ def test_an_undo_listing_past_its_bound_refuses_deletion_without_accusing(
         "transaction_artifact_state_unknown" in details["deletion_codes"],
         "transaction_metadata_corrupt" in details["codes"],
     ) == (True, False)
+
+
+def test_filesystem_scan_does_not_hold_the_database_read_lock(tmp_path, now, monkeypatch):
+    """A writer can commit while doctor is examining undo files, without sleeps."""
+    _build_vault(tmp_path, now, transactions=3, operations_each=1)
+    original = doctor._checked_artifacts
+    committed = []
+
+    def inspect_after_writer(*args):
+        path = tmp_path / "run/markdown-transactions.sqlite3"
+        with sqlite3.connect(path, timeout=0) as writer:
+            writer.execute('UPDATE "transaction" SET operation_id=operation_id WHERE id=?', ("tx-000000",))
+        committed.append(True)
+        return original(*args)
+
+    monkeypatch.setattr(doctor, "_checked_artifacts", inspect_after_writer)
+    result = _check(tmp_path, now)
+    assert committed == [True], result
+    assert result["status"] == "ok", result
+
+
+def test_rows_remain_coherent_when_a_writer_commits_during_file_checks(tmp_path, now, monkeypatch):
+    _build_vault(tmp_path, now, transactions=3, operations_each=1)
+    original = doctor._checked_artifacts
+
+    def corrupt_after_snapshot(*args):
+        _delete_operations(tmp_path, "tx-000000")
+        return original(*args)
+
+    with monkeypatch.context() as context:
+        context.setattr(doctor, "_checked_artifacts", corrupt_after_snapshot)
+        snapshot = _check(tmp_path, now)
+    assert snapshot["status"] == "ok", snapshot
+    assert "transaction_state_corrupt" in _check(tmp_path, now)["details"]["deletion_codes"]
+
+
+def test_copied_rows_still_obey_the_doctor_deadline():
+    with pytest.raises(TimeoutError, match="deadline"):
+        list(doctor._checked_snapshot_rows([None], 0))
