@@ -66,3 +66,25 @@ transport redaction, immutable quote lookup and output DLP. Existing provider
 prefix, entropy, structured, finding-allowlist and truncation regressions remain
 required. The stored live source line is unchanged by the new redactor; full
 provider replay and installation are recorded separately in the private report.
+
+## Publication replay: marker spelling, 2026-09-29
+
+The next real publication was quarantined even though its model output had passed.
+The generated claim ledger contained a URL entity whose placeholder was `[redacted]`.
+The publication redactor changed only those eight letters to uppercase; this
+byte difference was incorrectly classified as protected content. The immutable
+source quotation used the original uppercase marker and was not the changed field.
+An unchanged saved transaction after-image now passes the corrected publication
+guard; no source, evidence quote, claim ledger or transaction was manually rewritten.
+
+Placeholder comparison preserves spelling and closing markup. Named values accept
+only the finite set of markers emitted by the existing rules, case-insensitively;
+unknown marker suffixes still count as credential text. Short password options use
+the same replacement rule, preserving an exactly quoted known marker. Real secrets,
+extra text after a marker, and invented marker names remain blocked.
+
+The rejected alternative was to canonicalize immutable quotations or bypass the
+publication guard. Neither is needed: spellings of an already removed value are
+not secrets, while evidence must still match exact source bytes. This changes no
+DLP policy or allowed source scope. Eighteen regression cases failed on the old
+code; negative credential cases remain part of the same gate.

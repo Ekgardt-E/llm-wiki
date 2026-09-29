@@ -188,3 +188,30 @@ def test_a_redacted_source_quote_survives_transport_and_immutable_validation():
     transported = redact_for_transport(line, DLPPolicy())
     assert _sole_quote_offset(line.encode(), transported.encode()) == 0
     require_safe_model_output(transported, DLPPolicy())
+
+
+@pytest.mark.parametrize('marker', ['[redacted]', '[Redacted]', '[REDACTED]'])
+@pytest.mark.parametrize('template', [
+    'https://example.invalid/?token={}', '--password={}',
+    'mysql -p{}', 'sshpass -p {}', 'docker login -p {}',
+    'mysql -p"{}"', 'sshpass -p \'{}\'', '{{"password":"{}"}}',
+])
+def test_existing_placeholder_case_does_not_trigger_publication_dlp(marker, template):
+    from model_dlp import require_safe_publication
+    from secret_redact import redact_secrets
+
+    text = template.format(marker)
+    assert redact_secrets(text) == text
+    require_safe_publication(text.encode())
+
+
+@pytest.mark.parametrize('value', ['[redacted]freshCredential123', '[redacted_freshCredential123]'])
+@pytest.mark.parametrize('template', ['https://example.invalid/?token={}', 'mysql -p"{}"', '{{"password":"{}"}}'])
+def test_placeholder_spelling_does_not_exempt_extra_secret_text(value, template):
+    from model_dlp import DLPContentBlocked, require_safe_publication
+    from secret_redact import redact_secrets
+
+    text = template.format(value)
+    assert value not in redact_secrets(text)
+    with pytest.raises(DLPContentBlocked):
+        require_safe_publication(text.encode())

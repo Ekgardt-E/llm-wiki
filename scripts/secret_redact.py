@@ -141,7 +141,15 @@ def _command_line(line: str) -> str:
     if command is None:
         return line
     flag = _ATTACHED_PASSWORD if command.group(1) else _ANY_PASSWORD
-    return line[: command.end()] + flag.sub(r"\1[REDACTED]", line[command.end():])
+    return line[: command.end()] + flag.sub(_command_password_replacement, line[command.end():])
+
+
+def _command_password_replacement(match: re.Match[str]) -> str:
+    raw = match.group()[len(match.group(1)):]
+    opening, value, _closing, _rest = _split_value(raw)
+    if opening and _is_redaction_marker(value):
+        return match.group()
+    return _pattern_replacement(match, replacement=r"\1[REDACTED]")
 
 
 def _redact_command_passwords(text: str) -> str:
@@ -207,7 +215,7 @@ def _pattern_replacement(match: re.Match[str], *, replacement: str) -> str:
     """
     redacted = match.expand(replacement)
     original = match.group()
-    if original.startswith(redacted) and not original[len(redacted):].strip(")]}`"):
+    if original[:len(redacted)].casefold() == redacted.casefold() and not original[len(redacted):].strip(")]}`"):
         return original
     return redacted
 
@@ -285,8 +293,23 @@ def _split_value(raw: str) -> tuple[str, str, str, str]:
     return "", head, "", raw[len(head):]
 
 
+# Only markers emitted by this redactor qualify; an arbitrary [redacted_secret]
+# must not become a way to smuggle credential text through the output guard.
+_REDACTION_MARKERS = frozenset(
+    marker
+    for _pattern, replacement in _PATTERNS
+    for marker in re.findall(r"\[REDACTED(?:_[A-Z]+)*\]", replacement)
+)
+
+
+def _is_redaction_marker(value: str) -> bool:
+    return value.upper() in _REDACTION_MARKERS
+
+
 def _replace_named_value(match: re.Match[str]) -> str:
     opening, value, closing, rest = _split_value(match.group(2))
+    if _is_redaction_marker(value):
+        return match.group(0)
     if not _value_is_credential(value, bool(opening)):
         return match.group(0)
     return f"{match.group(1)}{opening}[REDACTED]{closing}{rest}"
