@@ -1661,6 +1661,46 @@ def test_run_doctor_uses_supplied_absolute_deadline_after_queue_delay(tmp_path, 
     assert captured == [50.0]
 
 
+def test_core_checks_do_not_start_after_an_earlier_check_spends_the_deadline(tmp_path, monkeypatch):
+    import doctor
+
+    clock = [40.0]
+
+    def environment(*args):
+        clock[0] = 51.0
+        return doctor._result("environment", "ok", "ok", {})
+
+    def unexpected_runtime(*args):
+        raise AssertionError("runtime work started after the deadline")
+
+    monkeypatch.setattr(doctor.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(doctor, "_environment_check", environment)
+    monkeypatch.setattr(doctor, "_runtime_check", unexpected_runtime)
+    monkeypatch.setattr(doctor, "_deferrable_checks", lambda *args: ())
+    checks = doctor._collect_checks(tmp_path, tmp_path, tmp_path, datetime.now(timezone.utc), 50.0)
+    assert checks[0]["status"] == "ok"
+    assert {item["id"] for item in checks[1:]} == {
+        "runtime", "adoption", "filesystem", "transactions", "queue", "archives", "claims",
+    }
+    assert all(item["details"]["budget_exhausted"] for item in checks[1:])
+    assert all(item["status"] == "degraded" for item in checks[1:])
+
+
+def test_expired_deletion_observation_does_not_reopen_adoption(tmp_path, monkeypatch):
+    import doctor
+    import installed_memory_repair
+
+    def unexpected_adoption(**kwargs):
+        raise AssertionError("adoption work started after the deadline")
+
+    monkeypatch.setattr(installed_memory_repair, "require_reliability_v3_adopted", unexpected_adoption)
+    monkeypatch.setattr(doctor.time, "monotonic", lambda: 51.0)
+    snapshot = doctor._run_deletion_check(tmp_path, datetime.now(timezone.utc), deadline=50.0)
+    assert snapshot["permit"] is False
+    assert snapshot["quiescent"] is False
+    assert snapshot["blockers"] == [{"code": "run_deletion_state_unknown"}]
+
+
 def test_budget_exhaustion_degrades_overall_and_health_summary(tmp_path):
     from doctor import degraded_summary, run_doctor
 
@@ -2133,7 +2173,9 @@ def test_run_doctor_executes_lsp_check_after_budget_exhaustion(tmp_path, monkeyp
 
     assert calls == [deadline]
     assert _check(report, "lsp")["details"]["codes"] == ["lsp_state_unreadable"]
-    assert report["run_deletion"]["blockers"] == [{"code": "legacy_protocol_unquiesced"}]
+    assert report["run_deletion"]["blockers"] == [{"code": "run_deletion_state_unknown"}]
+    assert report["run_deletion"]["permit"] is False
+    assert report["run_deletion"]["quiescent"] is False
 
 
 def test_doctor_reports_mismatched_pyright(tmp_path, monkeypatch) -> None:

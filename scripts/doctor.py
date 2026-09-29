@@ -2733,6 +2733,9 @@ def _run_deletion_check(
     collected: dict[str, dict] | None = None,
 ) -> dict:
     """Return an immediate, non-permitting observation of adopted runtime state."""
+    snapshot_deadline = min(deadline, time.monotonic() + 20.0)
+    if _deadline_reached(snapshot_deadline):
+        return _deletion_snapshot(["run_deletion_state_unknown"])
     from installed_memory_repair import (
         ReliabilityV3ValidationError,
         require_reliability_v3_adopted,
@@ -2745,9 +2748,6 @@ def _run_deletion_check(
     except ReliabilityV3ValidationError as exc:
         return _deletion_snapshot([exc.code])
 
-    snapshot_deadline = min(deadline, time.monotonic() + 20.0)
-    if _deadline_reached(snapshot_deadline):
-        return _deletion_snapshot(["run_deletion_state_unknown"])
     codes = _retained_runtime_observation(
         collected, root_path, state_path, now, snapshot_deadline,
         validate_reliability_v3_runtime,
@@ -8686,25 +8686,23 @@ def _collect_checks(
     "not completed" whenever a later check ran past the deadline (audit
     2026-09-26 B-19, docs/research/2026-09-26-a-check-is-judged-when-it-ends.md).
     """
-    runs = [
-        lambda: _environment_check(root_path, state_path),
-        lambda: _runtime_check(state_path),
-        lambda: _adoption_check(root_path, state_path),
-        lambda: _filesystem_check(state_path, deadline),
-        lambda: _transaction_check(state_path, generated_at, deadline, vault_root=root_path),
-        lambda: _queue_check(state_path, generated_at, deadline),
-        lambda: _archive_check(root_path, state_path, deadline),
-        lambda: _claim_check(root_path, state_path, deadline),
-    ]
-    runs.extend(
-        _deferred_run(check_id, operation, deadline)
-        for check_id, operation in _deferrable_checks(root_path, state_path, home_path, generated_at)
+    checks = (
+        ("environment", lambda _budget: _environment_check(root_path, state_path)),
+        ("runtime", lambda _budget: _runtime_check(state_path)),
+        ("adoption", lambda _budget: _adoption_check(root_path, state_path)),
+        ("filesystem", lambda budget: _filesystem_check(state_path, budget)),
+        ("transactions", lambda budget: _transaction_check(state_path, generated_at, budget, vault_root=root_path)),
+        ("queue", lambda budget: _queue_check(state_path, generated_at, budget)),
+        ("archives", lambda budget: _archive_check(root_path, state_path, budget)),
+        ("claims", lambda budget: _claim_check(root_path, state_path, budget)),
+        *_deferrable_checks(root_path, state_path, home_path, generated_at),
     )
-    return [_unfinished_when_late(run(), deadline) for run in runs]
-
-
-def _deferred_run(check_id: str, operation, deadline: float):
-    return lambda: _completed_or_deferred(check_id, operation, deadline, deadline)
+    return [
+        _unfinished_when_late(
+            _completed_or_deferred(check_id, operation, deadline, deadline), deadline,
+        )
+        for check_id, operation in checks
+    ]
 
 
 def _mark_repair_deferred(check: dict) -> None:
