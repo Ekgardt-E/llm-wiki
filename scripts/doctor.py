@@ -1403,8 +1403,12 @@ def _staged_receipt_day(raw: bytes) -> str | None:
 
 
 def _part_receipt_path(logical_path: str, part: bytes) -> str:
+    return _part_receipt_path_from_digest(logical_path, hashlib.sha256(part).hexdigest())
+
+
+def _part_receipt_path_from_digest(logical_path: str, digest: str) -> str:
     identity = hashlib.sha256(
-        reliable_memory.canonical_json_bytes([logical_path, hashlib.sha256(part).hexdigest()])
+        reliable_memory.canonical_json_bytes([logical_path, digest])
     ).hexdigest()
     return f"{_COMPILE_RECEIPT_PREFIX}{identity}.md"
 
@@ -1462,7 +1466,8 @@ class _CompiledDaySupersession:
 
     def _day_compiled(self, logical_path: str, committed_creates: set[str]) -> bool:
         content = read_stable_bytes(self.vault_root / logical_path, _MAX_DAY_BYTES, label="daily source")
-        bounds = _daily_part_bounds(content)
+        compiled = lambda digest: _part_receipt_path_from_digest(logical_path, digest) in committed_creates  # noqa: E731
+        bounds = _daily_part_bounds(content, compiled)
         return bool(bounds) and all(
             _part_receipt_path(logical_path, content[start:end]) in committed_creates
             for start, end in bounds

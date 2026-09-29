@@ -517,7 +517,7 @@ def _daily_parts(
     compiled: Callable[[str, str], bool] | None = None,
 ) -> list[DailySnapshot]:
     """This day as the one or more parts the compiler still has to take."""
-    bounds = _daily_part_bounds(content)
+    bounds = _daily_part_bounds(content, _part_predicate(logical_path, compiled))
     parts = [
         DailySnapshot(
             logical_path,
@@ -541,8 +541,16 @@ def daily_is_compiled(
     """Whether every part of this day already has a receipt."""
     return all(
         compiled(logical_path, sha256_bytes(content[start:end]))
-        for start, end in _daily_part_bounds(content)
+        for start, end in _daily_part_bounds(content, _part_predicate(logical_path, compiled))
     )
+
+
+def _part_predicate(
+    logical_path: str, compiled: Callable[[str, str], bool] | None,
+) -> Callable[[str], bool] | None:
+    if compiled is None:
+        return None
+    return lambda digest: compiled(logical_path, digest)
 
 
 def _source_descriptor(snapshot: DailySnapshot) -> SourceDescriptor:
