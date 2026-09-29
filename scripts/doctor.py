@@ -8861,6 +8861,12 @@ def _bounded_summary(text: str) -> str:
     return text[: SUMMARY_LIMIT - 3].rstrip() + "..."
 
 
+def _cli_deadline(parser: argparse.ArgumentParser, deadline: float | None) -> float | None:
+    if deadline is not None and not math.isfinite(deadline):
+        parser.error("--deadline must be a finite monotonic timestamp")
+    return deadline
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check local LLM-Wiki health.")
     parser.add_argument("--repair", action="store_true", help="Apply safe idempotent repairs.")
@@ -8870,6 +8876,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Explicitly rebuild the immutable evidence generation under the repair fence.",
     )
     parser.add_argument("--json", action="store_true", help="Emit the structured report as JSON.")
+    parser.add_argument(
+        "--deadline", type=float,
+        help="Absolute monotonic deadline inherited from a calling process; overrides --time-budget.",
+    )
     parser.add_argument(
         "--time-budget",
         type=float,
@@ -8886,6 +8896,7 @@ def main(argv: list[str] | None = None) -> int:
         repair=args.repair or args.rebuild_generation,
         rebuild_generation=args.rebuild_generation,
         time_budget_seconds=args.time_budget,
+        deadline=_cli_deadline(parser, args.deadline),
     )
     _print_report(report, args.json)
     return {"ok": 0, "degraded": 1, "error": 2}[report["overall_status"]]

@@ -44,6 +44,7 @@ import itertools
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -3863,10 +3864,35 @@ def _doctor_report_codes(report: dict) -> list:
     return codes
 
 
-def _doctor_status(context: dict) -> dict:
-    from doctor import run_doctor
+def _doctor_process_report(completed: subprocess.CompletedProcess) -> dict:
+    report = json.loads(completed.stdout)
+    expected = {"ok": 0, "degraded": 1, "error": 2}[report["overall_status"]]
+    if completed.returncode != expected:
+        raise RuntimeError("doctor process exit does not match its health report")
+    return report
 
-    report = run_doctor(
+
+def _run_doctor_process(*, root: Path, state_root: Path, deadline: float) -> dict:
+    """Run health outside the model interpreter, within the original deadline."""
+    _check_deadline(deadline)
+    environment = dict(os.environ, LLM_WIKI_ROOT=str(root), LLM_WIKI_STATE_ROOT=str(state_root))
+    environment["PYTHONIOENCODING"] = "utf-8"
+    command = [
+        sys.executable, str(Path(__file__).with_name("doctor.py")),
+        "--json", "--deadline", repr(deadline),
+    ]
+    try:
+        completed = subprocess.run(
+            command, env=environment, capture_output=True, encoding="utf-8",
+            timeout=max(0.0, deadline - time.monotonic()), check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise TimeoutError("doctor process reached the operation deadline") from error
+    return _doctor_process_report(completed)
+
+
+def _doctor_status(context: dict) -> dict:
+    report = _run_doctor_process(
         root=context["root"],
         state_root=context["state_root"],
         deadline=context["deadline"],

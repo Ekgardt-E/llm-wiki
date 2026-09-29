@@ -434,6 +434,29 @@ def test_environment_reports_missing_root_layout_and_python(tmp_path, monkeypatc
     assert check["details"]["vault_root"]["status"] == "error"
 
 
+def test_cli_preserves_an_inherited_absolute_deadline(monkeypatch):
+    import doctor
+
+    seen = {}
+
+    def record(**kwargs):
+        seen.update(kwargs)
+        return {"overall_status": "ok", "repaired": [], "checks": []}
+
+    monkeypatch.setattr(doctor, "run_doctor", record)
+    assert doctor.main(["--deadline", "123.5", "--time-budget", "45"]) == 0
+    assert seen["deadline"] == 123.5
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_cli_rejects_a_nonfinite_inherited_deadline(value, capsys):
+    import doctor
+
+    with pytest.raises(SystemExit):
+        doctor.main([f"--deadline={value}"])
+    assert "finite monotonic timestamp" in capsys.readouterr().err
+
+
 def test_the_cli_accepts_a_larger_time_budget_and_refuses_an_impossible_one(
     tmp_path,
     monkeypatch,
