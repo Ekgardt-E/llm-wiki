@@ -4595,7 +4595,7 @@ def _acquire_compile_lock(spawn_token: str | None = None) -> tuple[str | None, s
     Research: docs/research/2026-09-10-a-lock-lives-as-long-as-its-process-not-thirty-minutes.md
     """
     try:
-        if maybe_compile._try_claim_lock():
+        if maybe_compile._claim_lock():
             return (_claim_direct_lock(), "claimed")
         if _spawned_lock_is_ours(maybe_compile, spawn_token):
             return (SPAWNED_LOCK, "spawned")
