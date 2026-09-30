@@ -52,6 +52,37 @@ def _publish_prompt():
     return queue_breadcrumb("user_prompt", "demo", "session-a", {"preview": "original"}, "one")
 
 
+def test_breadcrumb_reuses_its_validated_coordinator(delivery, monkeypatch):
+    import markdown_transaction
+
+    opened = []
+    original = markdown_transaction.active_markdown_coordinator
+
+    def open_coordinator(*args):
+        coordinator = original(*args)
+        opened.append(coordinator)
+        return coordinator
+
+    monkeypatch.setattr(markdown_transaction, "active_markdown_coordinator", open_coordinator)
+    assert _publish_prompt()
+    assert len(opened) == 1
+    assert len(published_intents(delivery[1])) == 1
+    _work(delivery)
+    assert "original" in next((delivery[0] / "knowledge/daily").glob("*.md")).read_text()
+
+
+def test_invalid_coordinator_is_refused_before_accepting_a_breadcrumb(delivery, monkeypatch):
+    import markdown_transaction
+
+    def invalid(*args):
+        raise ValueError("coordinator validation failed")
+
+    monkeypatch.setattr(markdown_transaction, "active_markdown_coordinator", invalid)
+    with pytest.raises(ValueError, match="coordinator validation failed"):
+        _publish_prompt()
+    assert published_intents(delivery[1]) == []
+
+
 def test_state_recovery_keeps_the_same_native_operation_id(monkeypatch):
     import capture_operation
 

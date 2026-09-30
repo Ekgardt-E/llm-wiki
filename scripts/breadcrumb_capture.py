@@ -73,14 +73,13 @@ def _verified_prior(source, prior):
     return prior
 
 
-def _publish(source, root, state_root):
+def _publish(source, root, state_root, coordinator):
     from integration_adapter import (
         _capture_relative_paths,
         _encoded_capture_record,
         _ensure_capture_intent_directories,
         _publish_capture_files_and_task,
     )
-    from markdown_transaction import active_markdown_coordinator
     from memory_queue import active_memory_queue
     from memory_state import MAX_CAPTURE_INTENT_BYTES
 
@@ -91,7 +90,6 @@ def _publish(source, root, state_root):
     pending, ready = _capture_relative_paths(intent_id)
     _ensure_capture_intent_directories(state_root, intent_id)
     queue = active_memory_queue(root, state_root)
-    coordinator = active_markdown_coordinator(root, state_root)
     try:
         _publish_capture_files_and_task(
             queue,
@@ -125,28 +123,26 @@ def _require_retained_after_failure(source, state_root, pending, ready, error):
 def queue_breadcrumb(event, slug, session, details, operation_id) -> bool:
     """True means durably accepted; an unadopted vault keeps its v2 writer."""
     from integration_adapter import _wake_capture_worker
-    from markdown_transaction import _reliability_v3_records_present
+    from markdown_transaction import _reliability_v3_records_present, active_markdown_coordinator
     from memory_state import ROOT, STATE_ROOT
 
     root = Path(os.environ.get("LLM_WIKI_ROOT", ROOT)).resolve()
     state_root = Path(os.environ.get("LLM_WIKI_STATE_ROOT", STATE_ROOT)).resolve()
     if not _reliability_v3_records_present(state_root):
         return False
-    if _legacy_recorded(root, state_root, operation_id):
+    coordinator = active_markdown_coordinator(root, state_root)
+    if _legacy_recorded(root, coordinator, operation_id):
         return True
     source = _source(event, slug, session, details, operation_id or uuid.uuid4().hex)
-    intent_id = _publish(source, root, state_root)
+    intent_id = _publish(source, root, state_root, coordinator)
     _wake_capture_worker({}, intent_id)
     return True
 
 
-def _legacy_recorded(root, state_root, operation_id):
+def _legacy_recorded(root, coordinator, operation_id):
     """Keep a completed synchronous capture completed across the upgrade."""
-    from markdown_transaction import active_markdown_coordinator
-
     if operation_id is None:
         return False
-    coordinator = active_markdown_coordinator(root, state_root)
     record = _legacy_operation_record(coordinator, operation_id)
     if record is None:
         return False
