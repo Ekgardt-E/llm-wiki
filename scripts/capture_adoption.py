@@ -270,7 +270,7 @@ def _complete_one_pending(
     """
     from integration_adapter import _publish_capture_files_and_task
 
-    payload = _verified_intent_bytes(state_root, record)
+    payload = _pending_intent_bytes(state_root, record)
     intent_id = str(record["intent_id"])
     if _already_recorded_breadcrumb(coordinator, state_root, record, payload):
         return intent_id
@@ -284,6 +284,15 @@ def _complete_one_pending(
         ready_relative=_ready_relative_path(record),
     )
     return intent_id
+
+
+def _pending_intent_bytes(state_root: Path, record: dict[str, Any]) -> bytes:
+    """A concurrent publisher may have moved the exact retained bytes to ready."""
+    try:
+        return _verified_intent_bytes(state_root, record)
+    except FileNotFoundError:
+        ready = {**record, "relative_path": _ready_relative_path(record)}
+        return _verified_intent_bytes(state_root, ready)
 
 
 def _already_recorded_breadcrumb(coordinator, state_root, row, payload) -> bool:

@@ -432,3 +432,68 @@ def test_unindexed_ingress_is_backed_up_and_blocks_runtime_deletion(delivery, tm
         assert copied.read_bytes() == original
     _work(delivery)
     assert "original" in next((root / "knowledge/daily").glob("*.md")).read_text()
+
+
+def test_another_publisher_finishing_during_discovery_is_not_a_loss(delivery, monkeypatch):
+    import capture_adoption as adoption
+
+    _publish_prompt()
+    _, state_root, queue, coordinator = delivery
+    path = _pending_intents(state_root)[0]
+    original = adoption._unindexed_pending_record
+    record = original(path, state_root)
+
+    def publish_before_read(pending, state):
+        adoption._complete_one_pending(queue, coordinator, state, record)
+        return original(pending, state)
+
+    monkeypatch.setattr(adoption, "_unindexed_pending_record", publish_before_read)
+    result = adoption.complete_pending_capture_intents(queue, coordinator, state_root=state_root)
+    assert result["skipped"] == []
+    _work(delivery)
+    assert "original" in next((delivery[0] / "knowledge/daily").glob("*.md")).read_text()
+
+
+def test_another_publisher_finishing_after_discovery_reuses_verified_ready(delivery, monkeypatch):
+    import capture_adoption as adoption
+
+    _publish_prompt()
+    _, state_root, queue, coordinator = delivery
+    pending = _pending_intents(state_root)[0]
+    row = adoption._unindexed_pending_record(pending, state_root)
+    payload = pending.read_bytes()
+    original = adoption._verified_intent_bytes
+    published = []
+
+    def publish_before_read(state, record):
+        if not published:
+            published.append(True)
+            integration_adapter._publish_capture_files_and_task(
+                queue, coordinator, intent_id=row["intent_id"], payload=payload,
+                intent_sha256=row["intent_sha256"], pending_relative=row["relative_path"],
+                ready_relative=adoption._ready_relative_path(row),
+            )
+        return original(state, record)
+
+    monkeypatch.setattr(adoption, "_verified_intent_bytes", publish_before_read)
+    assert adoption._complete_one_pending(queue, coordinator, state_root, row) == row["intent_id"]
+    _work(delivery)
+    assert next((delivery[0] / "knowledge/daily").glob("*.md")).read_text().count("original") == 1
+
+
+@pytest.mark.parametrize("ready_bytes", [None, b"changed"])
+def test_missing_pending_requires_the_exact_ready_bytes(delivery, ready_bytes):
+    import capture_adoption as adoption
+
+    _publish_prompt()
+    _, state_root, queue, coordinator = delivery
+    pending = _pending_intents(state_root)[0]
+    row = adoption._unindexed_pending_record(pending, state_root)
+    pending.unlink()
+    if ready_bytes is not None:
+        ready = state_root / adoption._ready_relative_path(row)
+        ready.write_bytes(ready_bytes)
+        ready.chmod(0o600)
+    with pytest.raises((FileNotFoundError, ValueError)):
+        adoption._complete_one_pending(queue, coordinator, state_root, row)
+    assert queue.capture_intent_record(row["intent_id"]) is None

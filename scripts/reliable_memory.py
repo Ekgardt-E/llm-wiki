@@ -757,9 +757,9 @@ def _contained_runtime_metadata(path: Path, state_root: Path) -> os.stat_result:
     root = Path(state_root).resolve(strict=True)
     try:
         path.parent.resolve(strict=True).relative_to(root)
-        return path.lstat()
     except (OSError, ValueError) as exc:
         raise PermissionError("runtime file is outside the configured state root") from exc
+    return path.lstat()
 
 
 def _require_bounded_regular_file(

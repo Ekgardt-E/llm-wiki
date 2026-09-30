@@ -159,3 +159,30 @@ two concurrent producers, unchanged first timestamp, tampered input, an invalid
 unindexed head with valid work behind it, legacy completed receipts, held Markdown
 writer, backup retention and deletion refusal. Historical failed hook occurrences
 are not retroactively declared delivered by installing this repair.
+
+
+## Publication races retain their real outcome (2026-09-30)
+
+After the durable-ingress repair, four actual adoption diagnostics reported
+PermissionError/outside-state-root. Each named intent has a ready file whose hash
+matches its markdown_committed terminal. The common bounded reader wrapped lstat
+ENOENT together with parent containment failures; a pending file removed by the
+other successful publisher was therefore mislabeled as a path-boundary violation.
+Two deterministic races reproduce that exact error: publication finishes during
+pending discovery, or between discovery and reading the saved descriptor.
+
+Parent containment validation stays unchanged. The final lstat now preserves its
+actual missing-file error, allowing discovery to observe a vanished entry normally.
+For an already discovered descriptor, the pending relay can use the corresponding
+ready file only after validating it against the same saved hash and byte size;
+missing or changed ready bytes still refuse publication. It then uses the existing
+idempotent fenced publisher. No diagnostic is suppressed solely because its ID
+was seen before, and no new wait, path, or weaker permission check is introduced.
+
+Graph edges for generic Path.resolve calls include unrelated resolver methods;
+the actual reader, publisher and recovery source were checked directly. Existing
+readers, backup and operational-database clients retain the boundary/ownership/
+no-follow checks. Guards cover the two real race points, missing both files,
+changed ready bytes, and missing files inside versus outside the configured root.
+The older four diagnostic records remain history; their individually verified
+ready/terminal proofs distinguish successful delivery from a genuine missing input.

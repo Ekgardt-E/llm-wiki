@@ -768,3 +768,16 @@ def test_reopening_an_operational_database_keeps_existing_locks(tmp_path: Path) 
 
     assert before > 0
     assert after == before
+
+
+@pytest.mark.parametrize("outside", [False, True])
+def test_missing_runtime_file_preserves_presence_and_boundary_errors(tmp_path, outside):
+    root = tmp_path / "state"
+    root.mkdir()
+    path = root / "missing.json"
+    expected = FileNotFoundError
+    if outside:
+        path = tmp_path / "missing.json"
+        expected = PermissionError
+    with pytest.raises(expected):
+        reliable_memory.read_runtime_bytes(path, root, max_bytes=1024)
