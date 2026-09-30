@@ -631,6 +631,49 @@ def test_compile_page_preserves_per_agent_evidence_attribution(vault, monkeypatc
     assert _resolved_evidence_texts(root, page) == _quoted_texts(evidence)
 
 
+def test_update_keeps_prior_day_evidence_outside_the_current_batch(vault):
+    """An update validates new citations and retains the prior page with its old ones."""
+    import compile_memory
+    from evidence_resolver import extract_evidence_references
+
+    root, state_root = vault
+    daily = _daily(root)
+    coordinator = MarkdownCoordinator(root, state_root)
+    budget = {"provider": "fake", "model": "fake-v1", "max_output_tokens": 4000}
+    first = compile_memory.pack_compile_batches(compile_memory.snapshot_compile_inputs([daily]), model=None)[0]
+    compile_memory.apply_compile_plan(
+        first.inputs, _semantic_plan(), action_key="a" * 64, trigger="manual", coordinator=coordinator,
+        batch=first, provider_budget=budget,
+    )
+    page_path = root / "knowledge/notes/exact-byte-pattern.md"
+    prior = page_path.read_bytes()
+    newer = daily.with_name("2026-07-15.md")
+    newer.write_bytes(daily.read_bytes())
+    second = compile_memory.pack_compile_batches(compile_memory.snapshot_compile_inputs([newer]), model=None)[0]
+    inputs = second.inputs
+    plan = _semantic_plan()
+    operation = plan["operations"][0]
+    operation["kind"] = "replace"
+    content = json.loads(operation["content"])
+    content["action"] = "update"
+    content["evidence"][0]["daily_date"] = "2026-07-15"
+    operation["content"] = canonical_json_bytes(content).decode()
+
+    result = compile_memory.apply_compile_plan(
+        inputs, plan, action_key="b" * 64, trigger="manual", coordinator=coordinator,
+        batch=second, provider_budget=budget,
+    )
+
+    page = page_path.read_bytes()
+    assert result.state == "committed"
+    assert page.startswith(prior.rstrip())
+    assert {reference.daily_id for reference in extract_evidence_references(page.decode())} == {
+        "2026-07-14", "2026-07-15",
+    }
+    assert len(inputs.dailies) == 1
+    assert inputs.dailies[0].logical_path == "knowledge/daily/2026-07-15.md"
+
+
 def _quoted_texts(evidence: list) -> list:
     return sorted(str(item["quoted_text"]) for item in evidence)
 
