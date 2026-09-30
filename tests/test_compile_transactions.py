@@ -2501,3 +2501,52 @@ def test_external_planning_rejects_own_persisted_gate_through_another_coordinato
     with owner.writer_gate():
         with pytest.raises(RuntimeError, match='persisted writer ownership'):
             compile_memory._assert_external_work_allowed(other)
+
+
+def test_validation_retry_carries_the_actual_failure_and_keeps_snapshot(vault, monkeypatch):
+    """A bad quote must produce useful feedback, not the identical blind retry."""
+    import compile_memory
+
+    root, state_root = vault
+    inputs = compile_memory.snapshot_compile_inputs([_daily(root)])
+    invalid = json.loads(_draft_response())
+    invalid["operations"][0]["evidence"][0]["quoted_text"] = "An invented observation."
+    replies = [json.dumps(invalid), _draft_response(), _pass_review()]
+    prompts = []
+    provider = _provider()
+    monkeypatch.setattr(compile_memory, "provider_candidates", lambda *a, **kw: [provider])
+    monkeypatch.setattr(compile_memory, "probe_candidate", lambda descriptor: True)
+
+    def call(descriptor, prompt, system_prompt, **kwargs):
+        prompts.append(prompt)
+        return LLMResult(descriptor, replies.pop(0), True, None, "native")
+
+    monkeypatch.setattr(compile_memory, "call_candidate", call)
+    resolved = compile_memory.resolve_compile_plan(
+        inputs, CompileCache(state_root), coordinator=MarkdownCoordinator(root, state_root)
+    )
+    assert len(prompts) == 3
+    assert "compile evidence does not match the immutable snapshot" not in prompts[0]
+    assert "compile evidence does not match the immutable snapshot" in prompts[1]
+    assert inputs.dailies[0].content.decode() in prompts[1]
+    assert compile_memory.validate_compile_plan(resolved.plan, inputs)
+
+
+def test_validation_feedback_is_included_in_the_existing_budget_check(vault, monkeypatch):
+    import compile_memory
+
+    root, state_root = vault
+    inputs = compile_memory.snapshot_compile_inputs([_daily(root)])
+    attempt = compile_memory._CompileAttempt(inputs, CompileCache(state_root), None, None)
+    provider = _provider()
+    attempt._record("draft", provider, "validation_error", "quote mismatch")
+    checked = []
+
+    def refuses(prompt, system, schema, descriptor):
+        checked.append(prompt)
+        return False
+
+    monkeypatch.setattr(attempt, "_fits", refuses)
+    assert attempt._drafted(provider, (None, None)) is None
+    assert "quote mismatch" in checked[0]
+    assert attempt.lineage[-1].endswith(":input_budget")
