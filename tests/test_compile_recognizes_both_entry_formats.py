@@ -113,6 +113,32 @@ def test_cached_part_survives_append_but_not_source_removal(tmp_path):
         resolver.resolve(reference)
 
 
+def test_appending_a_day_does_not_repeat_a_verified_historical_search(tmp_path, monkeypatch):
+    resolver, daily, reference = _historical_resolver(tmp_path)
+    assert resolver.resolve(reference).bytes == b"first evidence"
+
+    def unexpected_search(*args):
+        pytest.fail("append discarded a verified historical slice")
+
+    monkeypatch.setattr(evidence, "compile_part_slice", unexpected_search)
+    for hour in (12, 13, 14):
+        daily.write_bytes(daily.read_bytes() + f"\n## [{hour}:00:00] append\nmore\n".encode())
+        assert resolver.resolve(reference).bytes == b"first evidence"
+
+
+def test_append_invalidates_a_previously_missing_historical_slice(tmp_path):
+    resolver, daily, _reference = _historical_resolver(tmp_path)
+    future = b"## [12:00:00] append\nfuture evidence\n"
+    start = future.index(b"future evidence")
+    reference = evidence.EvidenceRef(
+        "2026-01-01", sha256_bytes(future), "12:00:00", start, start + 15,
+    )
+    with pytest.raises(evidence.EvidenceResolutionError, match="source hash mismatch"):
+        resolver.resolve(reference)
+    daily.write_bytes(daily.read_bytes() + b"\n" + future)
+    assert resolver.resolve(reference).bytes == b"future evidence"
+
+
 def test_heading_day_can_be_packed(tmp_path, monkeypatch) -> None:
     from tests.test_a_split_day_is_archived_with_every_part import _vault
 

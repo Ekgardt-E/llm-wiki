@@ -1173,13 +1173,23 @@ def _slice_at(content: bytes, starts: list[int], digest: str) -> bytes | None:
     return None
 
 
+def _reusable_flat_parts(
+    previous: bytes, current: bytes, parts: dict[str, bytes | None],
+) -> dict[str, bytes | None]:
+    if current == previous:
+        return parts
+    if current.startswith(previous):
+        return {digest: part for digest, part in parts.items() if part is not None}
+    return {}
+
+
 class EvidenceResolver:
     def __init__(self, vault: Path, *, state_root: Path | None = None):
         self.vault = Path(vault).resolve(strict=True)
         self.state_root = state_root
         self.daily_root = self.vault / "knowledge" / "daily"
         self.archive_root = self.daily_root / "archive"
-        self._flat_parts: dict[Path, tuple[str, dict[str, bytes | None]]] = {}
+        self._flat_parts: dict[Path, tuple[bytes, dict[str, bytes | None]]] = {}
 
     def resolve(self, reference: EvidenceRef | str) -> ResolvedEvidence:
         ref = EvidenceRef.parse(reference) if isinstance(reference, str) else reference
@@ -1195,19 +1205,18 @@ class EvidenceResolver:
         current_digest = sha256_bytes(content)
         if current_digest == ref.source_sha256:
             return self._slice(ref, content, flat, "flat")
-        part = self._flat_part(flat, content, current_digest, ref.source_sha256)
+        part = self._flat_part(flat, content, ref.source_sha256)
         if part is None:
             raise EvidenceResolutionError("flat daily source hash mismatch")
         return self._slice(ref, part, flat, "flat-part")
 
     def _flat_part(
-        self, flat: Path, content: bytes, current_digest: str, source_digest: str,
+        self, flat: Path, content: bytes, source_digest: str,
     ) -> bytes | None:
-        """Reuse a historical search only for freshly read, identical source bytes."""
-        previous_digest, parts = self._flat_parts.get(flat, ("", {}))
-        if previous_digest != current_digest:
-            parts = {}
-            self._flat_parts[flat] = (current_digest, parts)
+        """Reuse proven slices after verified append; changed bytes invalidate them."""
+        previous, parts = self._flat_parts.get(flat, (b"", {}))
+        parts = _reusable_flat_parts(previous, content, parts)
+        self._flat_parts[flat] = (content, parts)
         if source_digest not in parts:
             parts[source_digest] = compile_part_slice(content, source_digest)
         return parts[source_digest]
