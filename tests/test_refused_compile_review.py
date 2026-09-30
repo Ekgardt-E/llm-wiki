@@ -106,3 +106,26 @@ def test_previously_reviewed_work_becoming_applied_is_not_cleared(refused):
     with coordinator._connect() as database:
         database.execute('UPDATE operation SET applied=1 WHERE transaction_id=?', (identifier,))
         assert not reviewed_refusal(database, identifier, coordinator.state_root)
+
+
+def test_repair_does_not_resurrect_an_explicitly_rejected_draft(refused):
+    import repair_refused_page_creation as repair
+
+    coordinator, identifier, _ = refused
+    with coordinator._connect() as database:
+        database.execute('UPDATE "transaction" SET error_code=? WHERE id=?', ("precondition_failed", identifier))
+    assert len(repair._collect(coordinator, coordinator.vault)) == 1
+    _reject(coordinator, identifier)
+    assert repair._collect(coordinator, coordinator.vault) == []
+
+
+def test_invalid_review_cannot_be_ignored_by_repair(refused):
+    import repair_refused_page_creation as repair
+
+    coordinator, identifier, _ = refused
+    with coordinator._connect() as database:
+        database.execute('UPDATE "transaction" SET error_code=? WHERE id=?', ("precondition_failed", identifier))
+    _reject(coordinator, identifier)
+    (coordinator.transaction_root / identifier / "operator-review.json").write_text("invalid")
+    with pytest.raises(ValueError, match="inspection"):
+        repair._collect(coordinator, coordinator.vault)

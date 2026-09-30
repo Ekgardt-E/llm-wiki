@@ -49,3 +49,9 @@ absence of rejected output. Before the doctor change, a valid explicit review
 still produced one unresolved finding; no import error was used as regression
 proof. An initial create-collision fixture produced `conflicted`, so it was
 replaced by the actual DLP-refusal path before reproducing the defect.
+
+The existing refused-page restoration command also checks this decision: it
+skips explicitly rejected drafts and refuses an invalid review instead of
+resurrecting content. A regression proved the unmodified restoration command
+still offered a rejected draft, and now refuses to replay it. Quarantine
+retention remains protected independently of diagnostic resolution.

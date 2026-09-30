@@ -42,6 +42,7 @@ from markdown_transaction import (  # noqa: E402
 )
 from memory_state import ROOT, STATE_ROOT  # noqa: E402
 from reliable_memory import sha256_bytes  # noqa: E402
+from review_refused_compile import review_allows_replay  # noqa: E402
 
 KNOWLEDGE = "knowledge/"
 # A race is an accident and may be replayed. A DLP refusal is a decision: the
@@ -111,7 +112,10 @@ def _owed_pages(directory: Path, vault: Path) -> list[tuple[str, bytes]]:
 
 def _collect(coordinator, vault: Path) -> list[tuple[str, str, bytes]]:
     with coordinator._connect() as database:  # noqa: SLF001
-        identifiers = _quarantined_ids(database)
+        identifiers = [
+            identifier for identifier in _quarantined_ids(database)
+            if review_allows_replay(database, identifier, coordinator.state_root)
+        ]
     found = []
     for identifier in identifiers:
         directory = coordinator.transaction_root / identifier

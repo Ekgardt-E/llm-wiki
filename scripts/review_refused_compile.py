@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -85,6 +86,14 @@ def reviewed_refusal(database, identifier, state_root):
         return sha256_bytes(plan) == binding["plan_hash"]
     except (OSError, ValueError, KeyError, TypeError):
         return False
+
+
+def review_allows_replay(database, identifier, state_root):
+    if not os.path.lexists(_review_path(state_root, identifier)):
+        return True
+    if not reviewed_refusal(database, identifier, state_root):
+        raise ValueError("invalid operator review requires inspection before replay")
+    return False
 
 
 def _read_plan_bytes(path, state_root):
