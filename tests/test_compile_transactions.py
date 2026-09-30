@@ -578,6 +578,41 @@ def test_compile_transaction_commits_page_index_log_and_receipt(vault):
     )
 
 
+@pytest.mark.parametrize("receipt_version", [2, 3])
+@pytest.mark.parametrize("repeated_quote", ["A durable exact-byte observation.", "A durable exact-byte"])
+def test_receipt_preserves_distinct_sources_without_duplicate_bindings(vault, receipt_version, repeated_quote):
+    root, state_root = vault
+    import compile_memory
+
+    inputs = compile_memory.snapshot_compile_inputs([_daily(root)])
+    plan = _semantic_plan()
+    semantic = json.loads(plan["operations"][0]["content"])
+    first = semantic["evidence"][0]
+    semantic["evidence"].extend([
+        {**first, "quoted_text": repeated_quote, "claim": "Another observation from the same source line."},
+        {**first, "quoted_text": "The prior state is blue.", "claim": "The prior state was blue."},
+    ])
+    plan["operations"][0]["content"] = canonical_json_bytes(semantic).decode()
+    kwargs = {}
+    if receipt_version == 3:
+        kwargs = {"batch": compile_memory.pack_compile_batches(inputs, model="fake-v1")[0],
+                  "provider_budget": {"provider": "fake", "model": "fake-v1", "max_output_tokens": 4000}}
+    result = compile_memory.apply_compile_plan(
+        inputs, plan, action_key="a" * 64, trigger="manual",
+        coordinator=MarkdownCoordinator(root, state_root), **kwargs,
+    )
+    assert result.state == "committed"
+    receipt, = (root / "knowledge/daily/receipts").glob("*.md")
+    record = json.loads(receipt.read_text().split("```json\n", 1)[1].split("\n```", 1)[0])
+    assert len(record["evidence"]) == 2
+    assert {item["quote_sha256"] for item in record["evidence"]} == {
+        sha256_bytes(b"A durable exact-byte observation."), sha256_bytes(b"The prior state is blue."),
+    }
+    page = (root / "knowledge/notes/exact-byte-pattern.md").read_text()
+    assert "Another observation from the same source line." in page
+    assert "The prior state was blue." in page
+
+
 def test_compile_page_preserves_per_agent_evidence_attribution(vault, monkeypatch):
     root, state_root = vault
     daily = root / "knowledge/daily/2026-07-14.md"

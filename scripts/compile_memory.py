@@ -2975,13 +2975,19 @@ def _operation_content(planned: Mapping[str, object]) -> dict[str, object]:
 def _bound_evidence(
     operation_path: str, bindings: Sequence[Mapping[str, str]]
 ) -> list[dict[str, str]]:
-    return [
+    """Keep every distinct receipt binding after projecting away claim prose.
+
+    Several claims, or partial quotes widened to the same line, can legitimately
+    share one binding. Their page evidence stays intact; receipts require a set.
+    """
+    projected = [
         {
             "operation_path": operation_path,
             **{key: binding[key] for key in ("source_path", "source_digest", "quote_sha256")},
         }
         for binding in bindings
     ]
+    return list({canonical_json_bytes(item): item for item in projected}.values())
 
 
 def parse_compile_receipt_v3(
