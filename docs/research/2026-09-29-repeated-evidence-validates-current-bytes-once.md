@@ -150,3 +150,31 @@ The regression's old code returned the correct bytes but tried 501 starts before
 doing so. The new code must prove those same bytes with the relevant start first.
 Additional cases cover repeated ids, invalid locators followed by a valid
 reference on the same resolver, and existing append/tamper/cache protections.
+
+## Derived indexing releases the writer gate (2026-09-30)
+
+Source tracing found the post-commit `ClaimIndex.rebuild` still inside the global
+Markdown writer gate. The index is derived; it takes its own rebuild lock and
+does not publish Markdown. A rebuild failure already invalidates this disposable
+cache without undoing the committed pages. Holding the global writer gate during
+that work blocks unrelated capture and project publication unnecessarily.
+
+The regression observes both rebuilds in a real compile transaction: assessment
+outside the gate, then post-commit rebuild. The old version reports gate depths
+`[0,1]`; both must be zero while the page still commits and the deliberately
+failed cache still disappears. Existing receipt reuse must not trigger a new
+rebuild. The derived refresh now runs after leaving the writer gate; transaction
+preconditions, publication and receipts retain their original fence.
+
+Primary sources consulted today are
+[SQLite isolation](https://sqlite.org/isolation.html),
+[Optimistic Offline Lock](https://martinfowler.com/eaaCatalog/optimisticOfflineLock.html),
+and [Google SRE overload handling](https://sre.google/sre-book/handling-overload/).
+They support separating the serialization boundary from work that does not need
+it. Raising the writer timeout retains the unnecessary blocking; removing the
+refresh leaves a stale cache. Moving this existing refresh retains behavior with
+a shorter critical section and no new runtime contract, dependency or limit.
+Other writers can change Markdown during a derived rebuild, as they already can
+immediately after the old gate is released; readers still use the existing index
+freshness checks. This removes a demonstrated source of blocking, not proof that
+every observed capture timeout shares that cause.

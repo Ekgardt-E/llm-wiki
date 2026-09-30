@@ -967,10 +967,13 @@ def test_postcommit_claim_index_rebuild_failure_invalidates_without_failing_comm
     }
     original_rebuild = ClaimIndex.rebuild
     calls = 0
+    coordinator = MarkdownCoordinator(root, state_root)
+    rebuild_gate_depths = []
 
     def fail_after_commit(self, sources=None):
         nonlocal calls
         calls += 1
+        rebuild_gate_depths.append(getattr(coordinator._local, "gate_depth", 0))
         if calls == 1:
             return original_rebuild(self, sources)
         raise OSError("derived cache failure")
@@ -980,13 +983,14 @@ def test_postcommit_claim_index_rebuild_failure_invalidates_without_failing_comm
 
     result = compile_memory.apply_compile_plan(
         inputs, plan, action_key="6" * 64, trigger="manual",
-        coordinator=MarkdownCoordinator(root, state_root),
+        coordinator=coordinator,
         completed_at="2026-07-14T12:00:00Z",
     )
 
     assert result.state == "committed"
     assert (root / "knowledge/notes/exact-byte-pattern.md").is_file()
     assert not (state_root / "cache/claims.sqlite3").exists()
+    assert rebuild_gate_depths == [0, 0]
 
 
 def test_compile_does_not_search_for_unconsumed_claim_context(vault, monkeypatch):

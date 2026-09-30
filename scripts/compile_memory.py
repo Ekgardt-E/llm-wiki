@@ -3285,7 +3285,10 @@ def _published_once(
     publication.assess_claims()
     with coordinator.writer_gate(owner=owner):
         coordinator.recover(owner=owner, deadline=deadline, cancelled=cancelled)
-        return publication.publish()
+        result = publication.publish()
+    if result.touched:
+        _rebuild_claim_index(publication.claim_index)
+    return result
 
 
 def _published(
@@ -3914,7 +3917,6 @@ class _ApplyPlan:
         committed, sequence = _transaction_authority(
             self.coordinator, self.operation_id
         )
-        _rebuild_claim_index(self.claim_index)
         _clear_compile_source_failures(self.inputs, self.coordinator.state_root)
         return CompileApplyResult(
             committed.id,
