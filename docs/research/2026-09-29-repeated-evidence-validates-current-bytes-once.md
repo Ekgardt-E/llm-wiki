@@ -178,3 +178,28 @@ Other writers can change Markdown during a derived rebuild, as they already can
 immediately after the old gate is released; readers still use the existing index
 freshness checks. This removes a demonstrated source of blocking, not proof that
 every observed capture timeout shares that cause.
+
+
+## Quote failure diagnosis (2026-09-30)
+
+A private real rejected draft supplied a quotation with Markdown backticks removed
+around a quoted value. The immutable cited block contained the backticks: exact
+occurrences were zero, not an ambiguous repeated match or changed snapshot. The
+shared validator correctly refused it, but its error only said that the evidence
+did not match. The existing retry received neither the offending literal nor the
+number of matches; zero and multiple matches were indistinguishable.
+
+Keep the byte-exact validator and existing retry/budget pipeline. Its error now
+includes the JSON-encoded supplied literal and exact occurrence count, with a
+reminder to preserve punctuation and backticks. No fuzzy matching, normalization,
+new model, retry count, schema, or success criterion is introduced. This is a
+local diagnostic correction, not a new architecture or a guarantee that a model
+will always emit valid JSON or quotations. Accepted-plan cache identity is
+unchanged because valid behavior and the initial prompt are unchanged.
+
+The existing integration regression now requires the exact failing literal and
+count to reach the next draft while retaining required snapshot bytes. Two guards
+cover missing backticks and repeated literal ambiguity. All three fail against
+the previous generic message; the corrected full pipeline passes. Budget checks
+measure the actual transmitted prompt plus system/schema, rather than a hardcoded
+old error sentence, and continue checking the receipt's measured token count.

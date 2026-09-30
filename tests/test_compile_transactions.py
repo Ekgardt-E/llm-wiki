@@ -2573,6 +2573,8 @@ def test_validation_retry_carries_the_actual_failure_and_keeps_snapshot(vault, m
     assert len(prompts) == 3
     assert "compile evidence does not match the immutable snapshot" not in prompts[0]
     assert "compile evidence does not match the immutable snapshot" in prompts[1]
+    assert "An invented observation." in prompts[1]
+    assert "exact occurrences: 0" in prompts[1]
     assert inputs.dailies[0].content.decode() in prompts[1]
     assert compile_memory.validate_compile_plan(resolved.plan, inputs)
 
@@ -2647,7 +2649,9 @@ def test_validation_retry_repacks_only_optional_context_and_publishes_its_batch(
     assert resolved.batch.inputs.targets == batch.inputs.targets
     assert resolved.batch.inputs.vault_files == batch.inputs.vault_files
     assert resolved.action.sources == compiler._compile_source_descriptors(resolved.batch.inputs)
-    measured = len(compiler._draft_prompt_text(resolved.batch.inputs, "critique: ValueError: compile evidence does not match the immutable snapshot"))
+    measured = len(compiler.DRAFT_SYSTEM + "\n"
+                   + compiler.canonical_json_bytes(compiler.RAW_PLAN_SCHEMA).decode()
+                   + "\n" + prompts[1])
     assert resolved.batch.packing.measured_input_tokens == measured
     result = compiler.apply_compile_plan(
         resolved.batch.inputs, resolved.plan, action_key=resolved.action_key,
@@ -2670,3 +2674,18 @@ def test_retry_that_cannot_fit_required_sources_never_calls_provider(vault, monk
     assert attempt.inputs.dailies == batch.inputs.dailies
     assert attempt.inputs.targets == batch.inputs.targets
     assert attempt.lineage[-1].endswith(":input_budget")
+
+
+@pytest.mark.parametrize("block,quote,count", [
+    (b'Keep `"None"` literal.', b'Keep "None" literal.', 0),
+    (b'Literal. Literal.', b'Literal.', 2),
+])
+def test_quote_failure_names_the_exact_literal_and_occurrence_count(block, quote, count):
+    import compile_memory
+
+    with pytest.raises(ValueError) as refused:
+        compile_memory._sole_quote_offset(block, quote)
+    detail = str(refused.value)
+    assert f"exact occurrences: {count}" in detail
+    assert json.dumps(quote.decode(), ensure_ascii=False) in detail
+    assert "backticks" in detail

@@ -2589,8 +2589,18 @@ def _sole_quote_offset(block: bytes, quote_bytes: bytes) -> int:
     """An ambiguous quote is refused: one entry must name one span."""
     offsets = [match.start() for match in re.finditer(re.escape(quote_bytes), block)]
     if len(offsets) != 1:
-        raise ValueError("compile evidence does not match the immutable snapshot")
+        raise ValueError(_quote_failure_detail(quote_bytes, len(offsets)))
     return offsets[0]
+
+
+def _quote_failure_detail(quote_bytes: bytes, occurrences: int) -> str:
+    literal = json.dumps(quote_bytes.decode("utf-8"), ensure_ascii=False)
+    return (
+        "compile evidence does not match the immutable snapshot; "
+        f"exact occurrences: {occurrences}; quoted_text={literal}. "
+        "Copy one unique complete source line exactly, including Markdown backticks "
+        "and punctuation; do not paraphrase the evidence."
+    )
 
 
 def _line_bounds(block: bytes, quote_offset: int, quote_length: int) -> tuple[int, int]:
