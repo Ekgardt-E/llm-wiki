@@ -609,6 +609,7 @@
   "test_recovery_does_not_revisit_a_finished_abort.py": 13.22,
   "test_reflection.py": 0.12,
   "test_refusalbench_becomes_a_question_this_stand_can_read.py": 0.01,
+  "test_refused_compile_review.py": 7.3,
   "test_release_manifest.py": 0.26,
   "test_reliability_v3_adoption.py": 5.15,
   "test_reliable_memory.py": 1.44,

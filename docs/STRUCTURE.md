@@ -808,3 +808,14 @@ any of these appearing.
 
 Never skip steps 1-2. Architectural improvisation is the root cause of the
 most expensive bugs in this project's history.
+
+### Operator review of refused compile drafts
+
+`scripts/review_refused_compile.py TRANSACTION_ID --actor ACTOR --reason REASON`
+records an explicitly reviewed rejection of an entirely unapplied, quarantined
+compile. Review all intended output before invoking it. It writes an immutable
+`operator-review.json` beside that transaction's existing `plan.json`, binding
+its request and plan hashes. Doctor reports it as a reviewed rejection, never
+as a successful publication. Sources, quarantines and after-images stay retained;
+this command neither creates compile receipts nor permits runtime deletion.
+Automatic capture and compilation do not invoke this command.

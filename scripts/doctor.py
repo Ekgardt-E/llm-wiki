@@ -1369,12 +1369,24 @@ def _scan_transaction_database(
             details=details,
             states=states,
         )
+        reviewed = _reviewed_compile_refusals(database, state_root)
+        details["quarantined_reviewed"] = len(reviewed)
         details["quarantined_unresolved"] = _unresolved_quarantine(
             database,
             transaction_columns,
             _CompiledDaySupersession(vault_root, state_root),
+            reviewed,
         )
         return None
+
+
+def _reviewed_compile_refusals(database: sqlite3.Connection, state_root: Path) -> frozenset[str]:
+    from review_refused_compile import reviewed_refusal
+
+    return frozenset(
+        identifier for identifier in _quarantined_ids(database)
+        if reviewed_refusal(database, identifier, state_root)
+    )
 
 
 def _quarantined_ids(database: sqlite3.Connection) -> set[str]:
@@ -1512,8 +1524,9 @@ def _unresolved_quarantine(
     database: sqlite3.Connection,
     transaction_columns: set[str],
     supersession: _CompiledDaySupersession | None = None,
+    reviewed: frozenset[str] = frozenset(),
 ) -> int:
-    """Quarantined attempts whose work never happened.
+    """Unrecovered attempts that also lack an explicit operator rejection.
 
     Quarantine is retained evidence, so counting all of it as an open problem
     left a vault that had already recovered permanently reporting `error` — and
@@ -1533,7 +1546,7 @@ def _unresolved_quarantine(
     """
     if "parent_transaction_id" not in transaction_columns:
         return _quarantined_total(database)
-    open_attempts = _quarantined_ids(database) - resolved_by_lineage(database)
+    open_attempts = (_quarantined_ids(database) - resolved_by_lineage(database)).difference(reviewed)
     if not open_attempts:
         return 0
     committed_creates = committed_created_paths(database)
@@ -1627,7 +1640,7 @@ def _attention_parts(states: dict[str, int], invalid_state: bool, details: dict)
         (unsettled, f"{unsettled} transaction(s) still unsettled"),
         (
             details["quarantined_unresolved"],
-            f"{details['quarantined_unresolved']} refused attempt(s) whose work never happened",
+            f"{details['quarantined_unresolved']} refused attempt(s) awaiting recovery or operator review",
         ),
         (invalid_state, "a transaction in a state this runtime does not define"),
         (
@@ -1651,6 +1664,12 @@ def _transaction_message(
     same nine stops reading the line at all.
     """
     if not (problem or invalid_state):
+        if details.get("quarantined_reviewed"):
+            return (
+                "Transaction state is healthy; "
+                f"{details['quarantined_reviewed']} rejected compile draft(s) "
+                "retained after operator review."
+            )
         return "Transaction state is healthy."
     parts = _attention_parts(states, invalid_state, details)
     return "Transaction state requires operator attention: " + "; ".join(parts) + "."
@@ -1686,6 +1705,7 @@ def _empty_transaction_details() -> tuple[dict, dict[str, int]]:
         "overdue_writers": 0,
         "live_maintenance_owners": 0,
         "quarantined_unresolved": 0,
+        "quarantined_reviewed": 0,
         "read_error": False,
         "state_invalid": False,
         "deletion_codes": [],
