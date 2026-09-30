@@ -105,6 +105,8 @@ def build_session_start_context(slug: str | None = None) -> Sequence[Any]:
     return build_context_items(slug)
 
 
+# Prompt occurrence identity belongs in source_event_id, not in its payload:
+# the prompt payload hash is also the existing content-based rate-limit key.
 OCCURRENCE_EVENTS = EVENTS - {"user_prompt"}
 CHECKPOINT_SIGNAL_FIELDS = frozenset(
     {
@@ -500,8 +502,7 @@ def normalize_occurrence_event(
     """Assign missing occurrence identity once at the outer adapter boundary."""
     normalized_raw = raw
     if (
-        event in OCCURRENCE_EVENTS
-        and occurred_at is None
+        occurred_at is None
         and raw.get("timestamp") is None
         and _source_event_id(raw) is None
     ):
