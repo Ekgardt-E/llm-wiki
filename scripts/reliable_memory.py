@@ -599,7 +599,10 @@ def _validate_operational_sidecar(path: Path, state_root: Path) -> None:
     path.parent.resolve(strict=True).relative_to(Path(state_root).resolve(strict=True))
     _require_bounded_regular_file(path, metadata, metadata.st_size)
     _require_owner_only_file(path, metadata)
-    if metadata.st_nlink != 1:
+    # SQLite removes sidecars when its last connection closes. On Linux lstat
+    # can finish after that unlink and report zero links for the old inode.
+    # Zero has no extra alias; only a count above one is a hard-link hazard.
+    if metadata.st_nlink > 1:
         raise PermissionError("SQLite sidecar must not have additional hard links")
 
 

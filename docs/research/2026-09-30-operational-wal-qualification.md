@@ -116,3 +116,30 @@ retains its dedupe identity and new tasks enqueue normally. A prepared Markdown
 transaction also applies after migration, and a committed operation retains its
 original receipt identity. Last related run: 387 passed / 3 existing platform
 skips; subsequent fence changes: 25 migration tests and 176 related tests passed.
+
+## Last-connection unlink race, 2026-09-30
+
+A restarted compiler refused admission with the sidecar hard-link diagnostic.
+Current files had one link. An isolated real SQLite open/close loop plus concurrent
+lstat reads reproduced the missing case: in a ten-second sample, 463127 reads
+reported one link, 304242 reported absence and 4553 reported zero links. SQLite
+removes its WAL/SHM files after the last connection closes; Linux can resolve the
+inode before unlink and finish metadata collection after its link count reaches
+zero. That is not an additional hard link. The failed live invocation did not log
+the numeric count, so the isolated reproduction establishes the defect without
+claiming that missing historical value was recorded.
+
+Reject counts above one, preserving regular-file, private-owner permissions and
+pre/post-open checks. No retry loop, sleep, sidecar deletion or lock-bearing
+file descriptor is added. Deterministic regression supplies real fstat metadata
+from an unlinked private file at the lstat seam, then exercises real reader/writer
+opens for both operational application IDs and both sidecar suffixes. It fails
+on the original additional-hard-links error. Existing genuine hard-link and
+symlink refusal cases remain required.
+
+Primary references checked 2026-09-30:
+- https://sqlite.org/wal.html — last-connection checkpoint and sidecar lifecycle.
+- https://man7.org/linux/man-pages/man2/stat.2.html — metadata observations need
+  not describe one atomic instant.
+- https://man7.org/linux/man-pages/man2/unlink.2.html — inode lifetime after its
+  last name is removed. The two Linux pages are one independent source family.

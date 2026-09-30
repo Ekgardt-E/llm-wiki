@@ -152,3 +152,32 @@ def test_hardlinked_sidecar_is_refused(wal_database, suffix):
     with pytest.raises(PermissionError, match="hard links"):
         memory.open_operational_db(path, busy_ms=0, contract=contract)
     assert target.read_bytes() == b"do not change"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX unlink of an open file")
+@pytest.mark.parametrize("suffix", ["-wal", "-shm"])
+@pytest.mark.parametrize("opener", ["reader", "writer"])
+def test_unlinked_sidecar_metadata_does_not_mean_multiple_links(wal_database, monkeypatch, suffix, opener):
+    from pathlib import Path
+
+    path, contract = wal_database
+    sidecar = path.with_name(path.name + suffix)
+    sidecar.write_bytes(b"")
+    sidecar.chmod(0o600)
+    with sidecar.open("rb") as held:
+        sidecar.unlink()
+        removed = os.fstat(held.fileno())
+    assert removed.st_nlink == 0
+    original = Path.lstat
+    observations = [removed]
+
+    def raced_lstat(target, *args, **kwargs):
+        if target == sidecar and observations:
+            return observations.pop()
+        return original(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "lstat", raced_lstat)
+    with contextlib.closing(_open(path, contract, opener)) as database:
+        assert database.execute("SELECT value FROM sample").fetchone()[0] == 0
+        assert database.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert not observations
