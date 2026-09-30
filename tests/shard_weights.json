@@ -610,7 +610,7 @@
   "test_reflection.py": 0.12,
   "test_refusalbench_becomes_a_question_this_stand_can_read.py": 0.01,
   "test_release_manifest.py": 0.26,
-  "test_reliability_v3_adoption.py": 19.6,
+  "test_reliability_v3_adoption.py": 5.15,
   "test_reliable_memory.py": 1.44,
   "test_reliable_memory_schemas.py": 0.2,
   "test_repair_backlinks.py": 1.96,

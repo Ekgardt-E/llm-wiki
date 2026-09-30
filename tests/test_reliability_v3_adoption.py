@@ -25,6 +25,49 @@ from reliable_memory import (
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 
 
+@pytest.mark.parametrize("warm", [False, True])
+def test_each_coordinator_open_checks_integrity_once(tmp_path, monkeypatch, warm):
+    import installed_memory_repair
+
+    root, state_root = _vault(tmp_path)
+    build_adopted_reliability_v3(root, state_root)
+    markdown_transaction._ADOPTION_VALIDATION_CACHE.clear()
+    if warm:
+        markdown_transaction.active_markdown_coordinator(root, state_root)
+    statements = []
+    original = markdown_transaction.open_readonly_operational_db
+
+    def traced(path, *args, **kwargs):
+        connection = original(path, *args, **kwargs)
+        if path.name == "markdown-transactions-v3.sqlite3":
+            connection.set_trace_callback(statements.append)
+        return connection
+
+    monkeypatch.setattr(markdown_transaction, "open_readonly_operational_db", traced)
+    monkeypatch.setattr(installed_memory_repair, "open_readonly_operational_db", traced)
+    markdown_transaction.active_markdown_coordinator(root, state_root)
+    assert statements.count("PRAGMA integrity_check") == 1
+    assert statements.count("PRAGMA foreign_key_check") == 1
+
+
+@pytest.mark.parametrize("warm", [False, True])
+def test_cold_and_warm_coordinator_open_refuse_logical_corruption(tmp_path, warm):
+    root, state_root = _vault(tmp_path)
+    build_adopted_reliability_v3(root, state_root)
+    coordinator = markdown_transaction.active_markdown_coordinator(root, state_root)
+    coordinator.prepare(
+        [markdown_transaction.MarkdownChange.create("knowledge/notes/unpublished.md", b"# Unpublished\n")],
+        operation_id="logical-corruption-fixture",
+    )
+    with sqlite3.connect(coordinator.database_path) as database:
+        database.execute("PRAGMA ignore_check_constraints=ON")
+        database.execute("UPDATE operation SET position = -1")
+    if not warm:
+        markdown_transaction._ADOPTION_VALIDATION_CACHE.clear()
+    with pytest.raises((RuntimeError, sqlite3.DatabaseError), match="invariant failed"):
+        markdown_transaction.active_markdown_coordinator(root, state_root)
+
+
 def _vault(tmp_path: Path) -> tuple[Path, Path]:
     root = tmp_path / "vault"
     state_root = tmp_path / "state"

@@ -362,6 +362,8 @@ def _validate_active_database_reference(
         complete = _database_schema_complete(database_name, database)
         integrity = database.execute("PRAGMA integrity_check").fetchall()
         foreign_keys = database.execute("PRAGMA foreign_key_check").fetchall()
+        if database_name == "coordinator":
+            markdown_transaction._require_v3_logical_invariants(database)
         observed = {
             "application_id": database.execute("PRAGMA application_id").fetchone()[0],
             "user_version": database.execute("PRAGMA user_version").fetchone()[0],

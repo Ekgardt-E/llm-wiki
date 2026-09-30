@@ -1689,6 +1689,10 @@ def _require_inside_state_root(path: Path, state_root: Path) -> None:
 
 def _require_v3_invariants(database: sqlite3.Connection) -> None:
     _require_v3_integrity(database)
+    _require_v3_logical_invariants(database)
+
+
+def _require_v3_logical_invariants(database: sqlite3.Connection) -> None:
     if _v3_operation_violations(database) or not _coordinator_v3_cross_table_invariant(
         database
     ):
@@ -3741,23 +3745,27 @@ def _validate_adoption_with_retry(vault: Path, state_root: Path) -> None:
             time.sleep(_WRITER_RETRY_CAP_SECONDS)
 
 
-def _require_adopted_once(vault: Path, state_root: Path) -> None:
+def _require_adopted_once(vault: Path, state_root: Path) -> bool:
+    """Return whether this call freshly validated both adopted databases."""
     key = _adoption_validation_key(vault, state_root)
     with _ADOPTION_VALIDATION_LOCK:
         if key in _ADOPTION_VALIDATION_CACHE:
-            return
+            return False
     _validate_adoption_with_retry(vault, state_root)
     with _ADOPTION_VALIDATION_LOCK:
         _ADOPTION_VALIDATION_CACHE.add(key)
+    return True
 
 
 def active_markdown_coordinator(vault: Path, state_root: Path) -> MarkdownCoordinator:
     """Open the validated adopted coordinator-v3 database for normal writes."""
     resolved_vault = Path(vault).resolve(strict=True)
     state = Path(state_root).absolute()
-    _require_adopted_once(resolved_vault, state)
+    freshly_validated = _require_adopted_once(resolved_vault, state)
     path = state / "run" / "markdown-transactions-v3.sqlite3"
-    coordinator = MarkdownCoordinator._from_v3_candidate(path, state_root=state)
+    if not freshly_validated:
+        validate_coordinator_v3_database(path, state_root=state)
+    coordinator = MarkdownCoordinator._from_validated_v3(path, state_root=state)
     coordinator.vault = resolved_vault
     return coordinator
 
@@ -5075,6 +5083,11 @@ class MarkdownCoordinator:
         cls, path: Path, *, state_root: Path
     ) -> MarkdownCoordinator:
         validate_coordinator_v3_database(path, state_root=state_root)
+        return cls._from_validated_v3(path, state_root=state_root)
+
+    @classmethod
+    def _from_validated_v3(cls, path: Path, *, state_root: Path) -> MarkdownCoordinator:
+        """Construct immediately after this caller's full database validation."""
         coordinator = cls.__new__(cls)
         coordinator.vault = Path(state_root).resolve()
         coordinator.state_root = Path(state_root)
