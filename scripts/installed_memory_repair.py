@@ -40,6 +40,7 @@ _SCHEMA_DIR = Path(__file__).with_name("schemas")
 _TOMBSTONE_SCHEMA = _SCHEMA_DIR / "operational-db-tombstone-v1.json"
 _MIGRATION_SCHEMA = _SCHEMA_DIR / "reliability-v3-migration-v1.json"
 _ADOPTION_SCHEMA = _SCHEMA_DIR / "reliability-v3-adoption-v1.json"
+_WAL_ADOPTION_SCHEMA = _SCHEMA_DIR / "reliability-v3-adoption-v2.json"
 # Bounded reads of the adoption's own JSON records; each is refused past its bound,
 # never cut. Measured 2026-09-27 on the installed vault: a tombstone is 487-541
 # bytes, the migration record 1 333 and the adoption record 2 507, so 4 KiB and
@@ -519,12 +520,26 @@ def _database_record_name(item: object) -> str:
     return name
 
 
-def _expected_schema_digests() -> dict[str, str]:
+def _expected_schema_digests(schema: Path = _ADOPTION_SCHEMA) -> dict[str, str]:
     return {
         "queue_schema_sha256": memory_queue.QUEUE_V3_SCHEMA_SHA256,
         "coordinator_schema_sha256": markdown_transaction.COORDINATOR_V3_SCHEMA_SHA256,
-        "adoption_schema_sha256": sha256_bytes(_ADOPTION_SCHEMA.read_bytes()),
+        "adoption_schema_sha256": sha256_bytes(schema.read_bytes()),
     }
+
+
+def _adoption_schema(record: dict[str, object]) -> Path:
+    schemas = record.get("schemas")
+    if not isinstance(schemas, dict):
+        raise ValueError("adoption schema digests missing")
+    supported = {
+        sha256_bytes(path.read_bytes()): path
+        for path in (_ADOPTION_SCHEMA, _WAL_ADOPTION_SCHEMA)
+    }
+    try:
+        return supported[schemas.get("adoption_schema_sha256")]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("adoption schema digest is unsupported") from exc
 
 
 def _require_adoption_sources(
@@ -556,7 +571,7 @@ def _require_adoption_sources(
     installation and fails closed; a changed one is an ordinary update.
     """
     schemas = adoption.get("schemas")
-    if not isinstance(schemas, dict) or schemas != _expected_schema_digests():
+    if not isinstance(schemas, dict) or schemas != _expected_schema_digests(_adoption_schema(adoption)):
         raise ValueError("adoption schema digests changed")
     if _kind(root / "scripts" / "integration_adapter.py") != "file":
         raise ValueError("installed integration is missing")
@@ -974,6 +989,14 @@ def require_reliability_v3_adopted(
 
 
 def _load_complete_adoption(*, root: Path, state_root: Path) -> dict[str, object]:
+    from reliable_memory import require_no_journal_migration
+
+    require_no_journal_migration(state_root)
+    return _read_complete_adoption(root=root, state_root=state_root)
+
+
+def _read_complete_adoption(*, root: Path, state_root: Path) -> dict[str, object]:
+    """Full validation, also used under the offline journal-migration fence."""
     vault = root.resolve(strict=True)
     state = state_root.absolute()
     paths = _paths(state)
@@ -986,7 +1009,7 @@ def _load_complete_adoption(*, root: Path, state_root: Path) -> dict[str, object
         paths["migration"], state, schema=_MIGRATION_SCHEMA, max_bytes=_MAX_RECORD_BYTES
     )
     adoption = _read_record(
-        paths["adoption"], state, schema=_ADOPTION_SCHEMA, max_bytes=_MAX_RECORD_BYTES
+        paths["adoption"], state, schema=_adoption_schema(migration), max_bytes=_MAX_RECORD_BYTES
     )
     return _validate_complete_adoption(
         root=vault,
@@ -2475,7 +2498,7 @@ def _inspect_adopted(
     if _kind(paths["adoption"]) != "file":
         raise ValueError("adoption record path has the wrong kind")
     adoption = _read_record(
-        paths["adoption"], state, schema=_ADOPTION_SCHEMA, max_bytes=_MAX_RECORD_BYTES
+        paths["adoption"], state, schema=_adoption_schema(migration), max_bytes=_MAX_RECORD_BYTES
     )
     _validate_complete_adoption(
         root=vault,

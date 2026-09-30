@@ -476,10 +476,12 @@ def open_operational_db(
     busy_ms: int,
     contract: OperationalDatabaseContract | None = None,
     initialize_contract: bool = False,
+    journal_migration: bool = False,
 ) -> sqlite3.Connection:
     """Open an owner-restricted database without changing its journal mode."""
     _require_operational_open_arguments(busy_ms, contract, initialize_contract)
     path = Path(path)
+    _require_operational_admission(path, journal_migration)
     validate_state_root(path.parent)
     expected = _operational_db_identity(path)
     _validate_operational_sidecars(path, path.parent)
@@ -501,6 +503,14 @@ def open_operational_db(
     except Exception:
         connection.close()
         raise
+
+
+def _require_operational_admission(path: Path, journal_migration: bool) -> None:
+    """The offline migrator alone may write while its durable marker exists."""
+    if journal_migration:
+        return
+    if path.parent.name == "run":
+        require_no_journal_migration(path.parent.parent)
 
 
 def _require_operational_open_arguments(
@@ -531,6 +541,14 @@ def _operational_db_identity(path: Path) -> os.stat_result:
     # process can hold locks on it and closing the descriptor strips nothing.
     os.close(descriptor)
     return path.stat(follow_symlinks=False)
+
+
+OPERATIONAL_JOURNAL_PENDING = Path("run/install/operational-journal-pending.json")
+
+
+def require_no_journal_migration(state_root: Path) -> None:
+    if os.path.lexists(Path(state_root) / OPERATIONAL_JOURNAL_PENDING):
+        raise OperationalDatabaseContractError("operational journal migration is pending")
 
 
 # Only the two adopted v3 protocols have an authorized WAL migration path.

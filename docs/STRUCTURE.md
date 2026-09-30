@@ -370,7 +370,11 @@ on 2026-09-30; this is not evidence of live cutover. The target preserves journa
 mode during ordinary opens and rejects unsafe SQLite versions and sidecars.
 Migration must quiesce canonical owners, durably coordinate both database modes
 with their adoption manifest, and resume or roll back after interruption.
-Migration evidence belongs under the existing `run/install/` directory.
+Migration evidence belongs under the existing `run/install/` directory. A private
+`operational-journal-pending.json` retains the immutable source records and target
+mode, blocking normal admission until verified completion. Completed evidence is
+retained as `operational-journal-<digest>.json` for recovery/audit. Adoption v2 pins
+WAL; immutable v1 remains necessary for unmigrated vaults and DELETE rollback.
 SQLite online backup and staged restore must pass before live migration.
 Other databases retain rollback-journal mode. See
 `knowledge/notes/operational-wal-preparation-20260930.md`. The listed v3 paths remain unavailable to normal runtime

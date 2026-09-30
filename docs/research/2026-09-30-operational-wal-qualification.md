@@ -75,3 +75,44 @@ Changing only the database or expanding the JSON schema would invalidate existin
 adoption. Their coordinated transition, failure recovery, full adopted-vault
 backup/restore, and restarting old mode-forcing processes remain required before
 installation/cutover. No live database has been switched by this change.
+
+## Restore qualification exposed an existing publication defect
+
+A real adopted-vault backup published to new roots fails normal client admission
+in DELETE mode too: publication used default umask permissions, and copied
+adoption file identities still name the original inodes. Successful archive
+validation alone was insufficient. Publication must create private files directly,
+then explicitly rebind only physical artifact identities to the verified copies,
+validate the complete adoption contract, and publish the rebound record. Source
+hashes, paths, protocol/schema versions and semantic records are not relaxed.
+An unchanged repeated publication must recognize this verified identity rebinding;
+all other destination content conflicts remain refusals. This is part of the
+required full restore qualification, not evidence that WAL is installed.
+
+Additional primary references for restoration, checked 2026-09-30:
+https://docs.python.org/3.14/library/os.html#os.stat_result documents filesystem
+identity and file permission fields; https://restic.readthedocs.io/en/stable/050_restore.html
+documents restoration into a target directory and verification. Neither promises
+that a copied file preserves the source inode. Preserving source hashes and
+validating newly bound physical identities is therefore required by this product's
+stronger adoption contract. SQLite snapshot sidecars are settled by SQLite itself;
+no potentially live WAL is manually deleted.
+
+The migration candidate passed interruptions at all seven publication boundaries
+in both directions, and abrupt child-process exit at database, migration-record,
+and adoption-record boundaries. Restart respects the existing expired-and-proven-
+dead ownership rule. Held live owners block migration before any mode switch.
+Restored DELETE and WAL vaults now pass full normal admission and a real new Markdown
+transaction. Repeated publication and content-conflict refusals remain tested.
+The v1 adoption schema is retained for unmigrated vaults and rollback, not as an
+unused duplicate; removing it requires retiring that active compatibility contract.
+
+A cached queue object exposed a gap in an admission-only migration fence: its
+normal enqueue method could still open a writer while the marker existed. The
+regression failed before adding the marker check to shared runtime writer opens.
+Only the explicit offline migrator opts into writing under the pending marker;
+normal cached clients remain blocked. After resume, the pre-migration queue task
+retains its dedupe identity and new tasks enqueue normally. A prepared Markdown
+transaction also applies after migration, and a committed operation retains its
+original receipt identity. Last related run: 387 passed / 3 existing platform
+skips; subsequent fence changes: 25 migration tests and 176 related tests passed.
