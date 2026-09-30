@@ -440,7 +440,7 @@
   "test_every_architecture_mode_is_bounded.py": 0.62,
   "test_every_git_call_has_a_deadline.py": 3.47,
   "test_every_hook_writer_gives_up_before_its_host.py": 0.01,
-  "test_every_limit_states_its_reason.py": 3.5,
+  "test_every_limit_states_its_reason.py": 3.78,
   "test_every_mode_checks_the_directory_it_is_given.py": 0.02,
   "test_every_pinned_download_retries_the_network.py": 5.61,
   "test_every_process_settles_its_inference_at_exit.py": 0.68,

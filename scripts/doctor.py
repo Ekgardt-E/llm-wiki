@@ -4977,8 +4977,8 @@ _CEILING_SCOPES = {
     "search.max_pages": ("notes",),
     "impact.max_note_files": ("notes",),
     "impact.max_total_note_bytes": ("notes",),
-    "claims.max_pages": ("notes", "projects"),
-    "claims.max_total_bytes": ("notes", "projects"),
+    "claims.max_pages": ("notes", "claim_projects"),
+    "claims.max_total_bytes": ("notes", "claim_projects"),
     "compile.max_sources": ("notes", "daily"),
     "compile.max_total_source_bytes": ("notes", "daily"),
     "corpus.max_files": ("notes", "projects", "daily"),
@@ -4994,7 +4994,17 @@ def _markdown_size(directory: Path) -> tuple[int, int]:
 
 
 def _vault_sizes(root: Path) -> dict[str, tuple[int, int]]:
-    return {name: _markdown_size(root / "knowledge" / name) for name in ("notes", "projects", "daily")}
+    sizes = {name: _markdown_size(root / "knowledge" / name) for name in ("notes", "projects", "daily")}
+    sizes["claim_projects"] = _claim_project_size(root / "knowledge" / "projects")
+    return sizes
+
+
+def _claim_project_size(directory: Path) -> tuple[int, int]:
+    """Use the claim reader's selection: project state/context, not journals."""
+    from claim_tree_manifest import _claim_pages_under
+
+    files = _claim_pages_under(directory, project_only=True)
+    return len(files), sum(path.stat().st_size for path in files)
 
 
 def _ceiling_use(name: str, ceiling: int, sizes: dict[str, tuple[int, int]]) -> dict:
