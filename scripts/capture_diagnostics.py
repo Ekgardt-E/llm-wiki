@@ -437,6 +437,7 @@ def record_capture_failure(
     error: BaseException | None = None,
     slug: str | None = None,
     session_id: str | None = None,
+    event_id: str | None = None,
 ) -> None:
     """Record one failed capture. Never raises — diagnostics never break a hook.
 
@@ -445,6 +446,8 @@ def record_capture_failure(
     """
     record = _failure_record(kind, reason, slug, session_id, _outcome_of(error, kind))
     record["call_path"] = _failure_call_path(error)
+    if event_id:
+        record["event_id"] = redact_secrets(str(event_id))
     written: list[bool] = []
 
     def _under_the_state_lock(state: dict) -> None:

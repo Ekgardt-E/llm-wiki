@@ -3657,6 +3657,8 @@ def _run_cli_event(args: argparse.Namespace) -> dict[str, object] | None:
         return None
     raw = _apply_checkpoint_arg(_read_hook_input(), args.checkpoint_type)
     envelope = normalize_occurrence_event(args.source, args.event, raw)
+    args.capture_event_id = envelope.event_id
+    args.capture_session_id = envelope.session
     return _dispatch_cli_event(args, envelope)
 
 
@@ -3732,6 +3734,8 @@ def _record_cli_capture_failure(
             f"adapter_{_failed_operation(args)}",
             describe_error_chain(error),
             error=error,
+            event_id=getattr(args, "capture_event_id", None),
+            session_id=getattr(args, "capture_session_id", None),
         )
     except Exception:  # noqa: BLE001 - a lost trace must not lose the session
         pass
