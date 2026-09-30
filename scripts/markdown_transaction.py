@@ -1737,6 +1737,7 @@ def validate_coordinator_v3_database(
             contract=_COORDINATOR_V3_CONTRACT,
         )
     ) as database:
+        database.execute("BEGIN")
         if not _coordinator_v3_schema_complete(database):
             raise _coordinator_migration_error(
                 "coordinator_v3_schema_incomplete",

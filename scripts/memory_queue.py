@@ -2232,6 +2232,7 @@ def validate_queue_v3_database(
     """Validate one unpublished or active queue v3 database fail-closed."""
     _require_inside_state_root(Path(path), Path(state_root))
     with closing(_open_queue_v3_readonly(Path(path), Path(state_root))) as database:
+        database.execute("BEGIN")
         if not _queue_v3_schema_complete(database):
             raise _migration_error(
                 "queue_v3_schema_incomplete", "queue v3 schema is incomplete"

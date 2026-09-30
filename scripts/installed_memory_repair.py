@@ -359,6 +359,7 @@ def _validate_active_database_reference(
             contract=contract,
         )
     ) as database:
+        database.execute("BEGIN")
         complete = _database_schema_complete(database_name, database)
         integrity = database.execute("PRAGMA integrity_check").fetchall()
         foreign_keys = database.execute("PRAGMA foreign_key_check").fetchall()
