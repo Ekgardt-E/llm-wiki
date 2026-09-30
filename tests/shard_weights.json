@@ -483,6 +483,7 @@
   "test_grounded_qa_errors.py": 0.01,
   "test_guardrails.py": 3.29,
   "test_hook_failures_reach_health.py": 0.11,
+  "test_idle_checkpoint_delivery.py": 2.53,
   "test_impact_analysis.py": 13.83,
   "test_impact_is_exact_only_on_the_bytes_it_indexed.py": 0.65,
   "test_impact_reads_what_the_diff_really_holds.py": 4.41,
