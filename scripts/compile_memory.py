@@ -68,7 +68,6 @@ from context_budget import ContextBudget, TokenCounter, count_tokens  # noqa: E4
 from contradiction_pipeline import (  # noqa: E402
     ContradictionPipeline,
     StaleLifecycleTarget,
-    default_secondary_search,
 )
 from evidence_resolver import (  # noqa: E402
     MAX_DAILY_PART_BYTES,  # noqa: F401 - re-exported: callers read the writer's bound here
@@ -3461,9 +3460,6 @@ class _ApplyPlan:
             vault=ROOT,
             coordinator=self.coordinator,
             source_page=source_page,
-            secondary_search=lambda query, limit: default_secondary_search(
-                ROOT, query, limit
-            ),
         )
 
     def _assessment(
@@ -3476,7 +3472,13 @@ class _ApplyPlan:
         """Each claim also sees the claims this same batch proposed before it."""
         normalized = NormalizedClaim(record)
         known = tuple(self.claim_index.candidates(normalized)) + tuple(candidates)
-        assessment = pipeline.assess(normalized, candidates=known or None, commit=False)
+        # The compiler consumes policy and ledger evidence, not retrieval-only
+        # context. Searching here cannot change policy and delays the snapshot's
+        # commit while unrelated project writers can invalidate it.
+        assessment = pipeline.assess(
+            normalized, candidates=known or None, commit=False,
+            include_retrieval_evidence=False,
+        )
         candidates.append(IndexedClaim(path, normalized, ledger_backed=False))
         return assessment
 

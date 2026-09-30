@@ -853,12 +853,15 @@ class ContradictionPipeline:
         candidates: Sequence[IndexedClaim] | None = None,
         benchmark_gate: bool = False,
         commit: bool = True,
+        include_retrieval_evidence: bool = True,
     ) -> ClaimAssessment:
         if not isinstance(claim, NormalizedClaim):
             raise TypeError("claim must be normalized")
         claim_tree_manifest = self._claim_tree_manifest(commit)
         resolved = tuple(self._candidates_for(claim, candidates))
-        retrieval_context = self._retrieval_context(claim, resolved)
+        retrieval_context = self._retrieval_context(
+            claim, resolved, enabled=include_retrieval_evidence
+        )
         outcomes, evaluation_lineage = self._candidate_outcomes(
             claim, resolved, benchmark_gate
         )
@@ -895,9 +898,11 @@ class ContradictionPipeline:
         return self.claim_index.candidates(claim)
 
     def _retrieval_context(
-        self, claim: NormalizedClaim, candidates: Sequence[IndexedClaim]
+        self, claim: NormalizedClaim, candidates: Sequence[IndexedClaim], *, enabled: bool
     ) -> tuple[Mapping[str, object], ...]:
-        """Bounded fallback context when the verified ledger offers no candidate."""
+        """Optional evidence for readers; it never changes a lifecycle decision."""
+        if not enabled:
+            return ()
         if candidates or self.secondary_search is None:
             return ()
         return tuple(self.secondary_search(str(claim.record["text"]), 5))[:5]

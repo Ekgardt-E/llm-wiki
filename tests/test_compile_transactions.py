@@ -976,7 +976,7 @@ def test_postcommit_claim_index_rebuild_failure_invalidates_without_failing_comm
         raise OSError("derived cache failure")
 
     monkeypatch.setattr(ClaimIndex, "rebuild", fail_after_commit)
-    monkeypatch.setattr(compile_memory, "default_secondary_search", lambda *args: [])
+    monkeypatch.setattr("contradiction_pipeline.default_secondary_search", lambda *args: [])
 
     result = compile_memory.apply_compile_plan(
         inputs, plan, action_key="6" * 64, trigger="manual",
@@ -987,6 +987,45 @@ def test_postcommit_claim_index_rebuild_failure_invalidates_without_failing_comm
     assert result.state == "committed"
     assert (root / "knowledge/notes/exact-byte-pattern.md").is_file()
     assert not (state_root / "cache/claims.sqlite3").exists()
+
+
+def test_compile_does_not_search_for_unconsumed_claim_context(vault, monkeypatch):
+    """No-ledger search cannot change compile policy or any published evidence."""
+    root, state_root = vault
+    daily = _daily(root)
+    import compile_memory
+    import contradiction_pipeline
+
+    new = _claim_record(
+        root, claim_id="new", value="red",
+        text="A durable exact-byte observation.", authority="user",
+    )
+    operation = json.loads(str(_semantic_plan()["operations"][0]["content"]))
+    operation["claims"] = [new]
+    plan = {
+        "schema_version": "compile-plan/v2",
+        "operations": [{
+            "kind": "create", "path": "knowledge/notes/exact-byte-pattern.md",
+            "content": canonical_json_bytes(operation).decode(),
+        }],
+    }
+    searches = []
+    def search(*args):
+        searches.append(args)
+        return []
+
+    monkeypatch.setattr(contradiction_pipeline, "default_secondary_search", search)
+    result = compile_memory.apply_compile_plan(
+        compile_memory.snapshot_compile_inputs([daily]), plan,
+        action_key="8" * 64, trigger="manual",
+        coordinator=MarkdownCoordinator(root, state_root),
+        completed_at="2026-07-14T12:00:00Z",
+    )
+
+    assert searches == [], "compile spent work retrieving context it never consumes"
+    assert result.state == "committed"
+    page = root / "knowledge/notes/exact-byte-pattern.md"
+    assert '"id":"new"' in page.read_text()
 
 
 def test_new_claim_page_inserted_after_assessment_fails_tree_manifest_precondition(
@@ -1030,7 +1069,7 @@ def test_new_claim_page_inserted_after_assessment_fails_tree_manifest_preconditi
         return original_apply(transaction_id, **kwargs)
 
     monkeypatch.setattr(coordinator, "apply", insert_phantom_then_apply)
-    monkeypatch.setattr(compile_memory, "default_secondary_search", lambda *args: [])
+    monkeypatch.setattr("contradiction_pipeline.default_secondary_search", lambda *args: [])
 
     # The first attempt is refused — the assessment really was computed against
     # a tree that no longer exists. The second reads the tree that does, and
@@ -1136,7 +1175,7 @@ def test_a_tree_that_never_stops_moving_still_refuses_the_compile(vault, monkeyp
         return original_apply(transaction_id, **kwargs)
 
     monkeypatch.setattr(coordinator, "apply", insert_a_new_page_then_apply)
-    monkeypatch.setattr(compile_memory, "default_secondary_search", lambda *args: [])
+    monkeypatch.setattr("contradiction_pipeline.default_secondary_search", lambda *args: [])
 
     with pytest.raises(TransactionFailure, match="claim tree manifest"):
         compile_memory.apply_compile_plan(
@@ -1219,7 +1258,7 @@ def test_compile_same_id_replacement_after_assessment_quarantines_without_mutati
     monkeypatch.setattr(
         contradiction_pipeline.ContradictionPipeline, "assess", assess_then_replace
     )
-    monkeypatch.setattr(compile_memory, "default_secondary_search", lambda *args: [])
+    monkeypatch.setattr("contradiction_pipeline.default_secondary_search", lambda *args: [])
     coordinator = MarkdownCoordinator(root, state_root)
 
     result = compile_memory.apply_compile_plan(
