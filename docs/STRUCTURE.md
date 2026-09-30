@@ -309,6 +309,11 @@ existing `run/queue-results/` proves committed Markdown, validated no-durable-co
 or explicit operator discard. Queue enqueue alone never permits intent deletion.
 Provider-derived `capture-decision/v1` records are published in `queue-results/`
 before side effects and reused after crashes.
+On adopted vaults, prompt and tool breadcrumbs use the same durable intent,
+queue, transaction and terminal path. Their `capture-breadcrumb-decision/v1`
+records describe deterministic appends without a model call. The original
+timestamp and bytes survive retry; see
+`docs/research/2026-09-30-breadcrumbs-survive-a-busy-writer.md`.
 Legacy `cache/transient-transcripts/` files are recovery input only; new capture work
 is not written to disposable cache.
 

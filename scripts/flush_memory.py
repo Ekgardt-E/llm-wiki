@@ -300,20 +300,12 @@ def _decode_capture_intent(data: bytes) -> dict[str, object]:
 
 
 def _require_capture_intent_identity(record: Mapping[str, object]) -> None:
-    from reliable_memory import canonical_json_bytes, sha256_bytes
+    from reliable_memory import canonical_json_bytes, capture_intent_identity, sha256_bytes
 
     source = {field: record[field] for field in _CAPTURE_SOURCE_FIELDS}
     chunk_sha256 = sha256_bytes(canonical_json_bytes(record["evidence"]))
     complete_sha256 = sha256_bytes(canonical_json_bytes(source))
-    identity = {
-        "schema_version": "capture-intent/v1",
-        "source_occurrence_id": record["source_occurrence_id"],
-        "source_event_id": record["source_event_id"],
-        "occurred_at": record["occurred_at"],
-        "checkpoint_reason": record["checkpoint_reason"],
-        "chunk_index": record["chunk_index"],
-        "chunk_sha256": chunk_sha256,
-    }
+    identity = capture_intent_identity(record, chunk_sha256)
     actual = (
         record["chunk_sha256"],
         record["complete_input_sha256"],
@@ -700,6 +692,15 @@ def _capture_decision_time(decision: Mapping[str, object]) -> datetime | None:
 def _require_capture_decision_semantics(
     decision: Mapping[str, object], intent: Mapping[str, object]
 ) -> None:
+    from breadcrumb_capture import is_breadcrumb, require_decision
+
+    if is_breadcrumb(intent):
+        require_decision(decision, intent)
+        return
+    _require_session_decision_semantics(decision, intent)
+
+
+def _require_session_decision_semantics(decision, intent):
     tier, body = _parse_capture_wire_output(decision["wire_output"])
     actual = (decision["tier"], decision["outcome"])
     expected = (tier, _capture_tier_outcome(tier))
@@ -819,6 +820,15 @@ def _index_capture_decision(
     )
 
 
+def _capture_decision_schema(decision):
+    names = {"capture-decision/v1": "capture-decision-v1.json",
+             "capture-breadcrumb-decision/v1": "capture-breadcrumb-decision-v1.json"}
+    name = names.get(decision.get("schema_version"))
+    if name is None:
+        raise RuntimeError("capture decision schema is unsupported")
+    return Path(__file__).with_name("schemas") / name
+
+
 def _decode_capture_decision(data: bytes) -> dict[str, object]:
     from reliable_memory import canonical_json_bytes, validate_schema
 
@@ -828,8 +838,7 @@ def _decode_capture_decision(data: bytes) -> dict[str, object]:
         raise RuntimeError("capture decision JSON is invalid") from exc
     if not isinstance(decision, dict):
         raise RuntimeError("capture decision must be a JSON object")
-    schema = Path(__file__).with_name("schemas") / "capture-decision-v1.json"
-    validate_schema(decision, schema)
+    validate_schema(decision, _capture_decision_schema(decision))
     if canonical_json_bytes(decision) != data:
         raise RuntimeError("capture decision is not canonical JSON")
     return decision
@@ -1267,6 +1276,18 @@ def process_new_capture(
     now: Callable[[], datetime] = _capture_now,
 ) -> object:
     record = _read_capture_intent(queue, lease, active)
+    from breadcrumb_capture import is_breadcrumb, process_breadcrumb
+
+    if is_breadcrumb(record):
+        return process_breadcrumb(queue, coordinator, lease, active,
+                                  task_fence, intent_fence, owner, record)
+    return _process_session_capture(queue, coordinator, lease, active,
+                                    task_fence, intent_fence, owner, record,
+                                    llm_call=llm_call, now=now)
+
+
+def _process_session_capture(queue, coordinator, lease, active, task_fence,
+                             intent_fence, owner, record, *, llm_call, now):
     _keep_session_record(record, now, coordinator, owner)
     _ensure_capture_results_directory(queue)
     resolved = _existing_capture_decision(
@@ -1461,5 +1482,3 @@ def _count_dropped_capture(kind: str, error: BaseException, session_id: str | No
     from secret_redact import describe_error
 
     record_capture_failure(kind, describe_error(error), error=error, session_id=session_id)
-
-

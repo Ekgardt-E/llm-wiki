@@ -109,7 +109,9 @@ def is_contention(error: BaseException) -> bool:
 # a worker that fails leaves them for the next worker or for adoption: its failure
 # is retried work, never a lost capture, whatever it raised. See
 # `docs/research/2026-09-14-a-worker-that-failed-lost-no-capture.md`.
-DURABLE_WORK_KINDS = frozenset({"adapter_capture_worker"})
+# breadcrumb_dispatch is emitted only after re-reading and validating retained
+# immutable source bytes; an attempted publication alone never earns this label.
+DURABLE_WORK_KINDS = frozenset({"adapter_capture_worker", "breadcrumb_dispatch"})
 
 # Failures recorded in the same trail that are not captures: an MCP tool call
 # that raised, a telemetry write that failed. Counting them as lost captures

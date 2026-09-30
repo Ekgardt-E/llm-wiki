@@ -184,6 +184,7 @@ def _append_tool_tag(
     *,
     agent: str = "unknown",
 ) -> bool:
+    """Durably capture a breadcrumb; adopted vaults append it asynchronously."""
     try:
         from daily_log_append import (
             BREADCRUMB_APPEND_BUDGET_SECONDS,
@@ -195,6 +196,11 @@ def _append_tool_tag(
         # One line, as the prompt breadcrumb: a line break in a path is not a line of the log.
         preview = " ".join(redact_secrets(target).split())[:MAX_TARGET_PREVIEW]
         source = canonical_agent(agent)
+        from breadcrumb_capture import queue_breadcrumb
+
+        if queue_breadcrumb("post_tool_use", slug, session_id,
+                            {"preview": preview, "tool": tool, "agent": source}, operation_id):
+            return True
         block = (
             f"- `[{ts}] tool | {source} | {session_id[:8]} | "
             f"{slug} | {tool}` {preview}"

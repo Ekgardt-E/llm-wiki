@@ -1767,3 +1767,17 @@ def _check_bound(
         raise SchemaValidationError(f"{location}: below {minimum_name}")
     if maximum_name in rule and value > rule[maximum_name]:
         raise SchemaValidationError(f"{location}: above {maximum_name}")
+
+
+def capture_intent_identity(source, chunk_digest):
+    """Stable native occurrence identity; capture time is data, not a retry key."""
+    identity = {
+        "schema_version": "capture-intent/v1",
+        "source_occurrence_id": source["source_occurrence_id"],
+        "source_event_id": source["source_event_id"],
+    }
+    if source["event"] in {"user_prompt", "post_tool_use"}:
+        return {**identity, "event": source["event"]}
+    return {**identity, "occurred_at": source["occurred_at"],
+            "checkpoint_reason": source["checkpoint_reason"],
+            "chunk_index": source["chunk_index"], "chunk_sha256": chunk_digest}

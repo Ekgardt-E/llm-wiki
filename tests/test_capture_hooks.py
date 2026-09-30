@@ -568,8 +568,9 @@ def test_tool_bookkeeping_returns_before_delegate_timeout_with_live_state_lock(
 
     budget = daily_log_append.BREADCRUMB_APPEND_BUDGET_SECONDS + integration_adapter.DELEGATE_STARTUP_SECONDS
     assert elapsed < budget
-    assert phase == "complete" or str(result).startswith("post-tool:fallback:")
     assert lock_file.read_text(encoding="utf-8") == owner
+    lock_file.unlink()
+    assert result == actions[phase]()
 
 
 def test_tool_event_is_written_while_bookkeeping_state_is_locked(

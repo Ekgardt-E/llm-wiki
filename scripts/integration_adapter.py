@@ -2966,20 +2966,17 @@ def _capture_source_record(
 
 
 def _encoded_capture_record(source: Mapping[str, object]) -> tuple[dict[str, object], bytes]:
-    from reliable_memory import canonical_json_bytes, sha256_bytes, validate_schema
+    from reliable_memory import (
+        canonical_json_bytes,
+        capture_intent_identity,
+        sha256_bytes,
+        validate_schema,
+    )
 
     evidence = source["evidence"]
     complete_digest = sha256_bytes(canonical_json_bytes(dict(source)))
     chunk_digest = sha256_bytes(canonical_json_bytes(evidence))
-    identity = {
-        "schema_version": "capture-intent/v1",
-        "source_occurrence_id": source["source_occurrence_id"],
-        "source_event_id": source["source_event_id"],
-        "occurred_at": source["occurred_at"],
-        "checkpoint_reason": source["checkpoint_reason"],
-        "chunk_index": source["chunk_index"],
-        "chunk_sha256": chunk_digest,
-    }
+    identity = capture_intent_identity(source, chunk_digest)
     intent_id = sha256_bytes(canonical_json_bytes(identity))
     record = {
         "schema_version": "capture-intent/v1",
@@ -3112,12 +3109,16 @@ def _publish_capture_files_and_task(
     intent_sha256: str,
     pending_relative: str,
     ready_relative: str,
+    resolve_payload: Callable[[bytes], bytes] | None = None,
 ) -> None:
-    from reliable_memory import publish_runtime_file
+    from reliable_memory import publish_runtime_file, sha256_bytes
 
     pending = Path(STATE_ROOT) / pending_relative
     ready = Path(STATE_ROOT) / ready_relative
     with _capture_publication_fence(queue, coordinator, intent_id) as (owner, fence):
+        if resolve_payload is not None:
+            payload = resolve_payload(payload)
+            intent_sha256 = sha256_bytes(payload)
         publish_runtime_file(
             pending, payload, state_root=Path(STATE_ROOT), create_only=True, mode=0o600
         )
