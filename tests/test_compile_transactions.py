@@ -1716,6 +1716,7 @@ def test_run_records_snapshot_hash_only_after_commit(vault, monkeypatch):
             plan={"schema_version": "compile-plan/v2", "operations": []},
             action_key="e" * 64,
             cache_hit=False,
+            batch=batch,
             provider_budget={
                 "provider": "fake",
                 "model": "fake-v1",
@@ -1831,6 +1832,7 @@ def test_run_refreshes_context_between_compile_batches(vault, monkeypatch):
                 canonical_json_bytes([item.logical_path for item in inputs.dailies])
             ),
             cache_hit=False,
+            batch=batch,
             provider_budget={
                 "provider": "fake",
                 "model": "fake-v1",
@@ -2549,4 +2551,79 @@ def test_validation_feedback_is_included_in_the_existing_budget_check(vault, mon
     monkeypatch.setattr(attempt, "_fits", refuses)
     assert attempt._drafted(provider, (None, None)) is None
     assert "quote mismatch" in checked[0]
+    assert attempt.lineage[-1].endswith(":input_budget")
+
+
+def _packed_retry_fixture(root, monkeypatch, source_padding=0, optional_lines=200):
+    import compile_memory as compiler
+    from context_budget import ContextBudget
+
+    optional = root / "knowledge/notes/optional-context.md"
+    optional.write_text("# Optional context\n" + "background material\n" * optional_lines)
+    daily = _daily(root)
+    daily.write_bytes(daily.read_bytes() + b"z" * source_padding + b"\n")
+    inputs = compiler.snapshot_compile_inputs([daily])
+    window = len(compiler._draft_prompt_text(inputs)) + 4000 + 1024 + 1
+    monkeypatch.setattr(compiler, "_compile_budget", lambda model: ContextBudget(model, window, 4000, 1024))
+    adapters = {"fake-model": len}
+    batch, = compiler.pack_compile_batches(inputs, model="fake-model", token_adapters=adapters)
+    return batch, adapters, optional
+
+
+@pytest.mark.parametrize("source_padding,optional_lines", [(0, 200), (17000, 2000)])
+def test_validation_retry_repacks_only_optional_context_and_publishes_its_batch(
+    vault, monkeypatch, source_padding, optional_lines,
+):
+    import compile_memory as compiler
+
+    root, state_root = vault
+    batch, adapters, optional = _packed_retry_fixture(root, monkeypatch, source_padding, optional_lines)
+    invalid = json.loads(_draft_response())
+    invalid["operations"][0]["evidence"][0]["quoted_text"] = "Invented observation"
+    replies = [json.dumps(invalid), _draft_response(), _pass_review()]
+    prompts = []
+    monkeypatch.setattr(compiler, "provider_candidates", lambda *a, **kw: [_provider()])
+    monkeypatch.setattr(compiler, "probe_candidate", lambda descriptor: True)
+
+    def call(descriptor, prompt, system_prompt, **kwargs):
+        prompts.append(prompt)
+        return LLMResult(descriptor, replies.pop(0), True, None, "native")
+
+    monkeypatch.setattr(compiler, "call_candidate", call)
+    coordinator = MarkdownCoordinator(root, state_root)
+    resolved = compiler.resolve_compile_plan(
+        batch.inputs, CompileCache(state_root), coordinator=coordinator,
+        batch=batch, token_adapters=adapters,
+    )
+    assert len(prompts) == 3
+    assert "background material" in prompts[0]
+    assert "background material" not in prompts[1]
+    assert "immutable snapshot" in prompts[1]
+    assert batch.inputs.dailies[0].content.decode() in prompts[1]
+    assert resolved.batch.manifest == batch.manifest
+    assert resolved.batch.inputs.targets == batch.inputs.targets
+    assert resolved.batch.inputs.vault_files == batch.inputs.vault_files
+    assert resolved.action.sources == compiler._compile_source_descriptors(resolved.batch.inputs)
+    measured = len(compiler._draft_prompt_text(resolved.batch.inputs, "critique: ValueError: compile evidence does not match the immutable snapshot"))
+    assert resolved.batch.packing.measured_input_tokens == measured
+    result = compiler.apply_compile_plan(
+        resolved.batch.inputs, resolved.plan, action_key=resolved.action_key,
+        trigger="manual", coordinator=coordinator, batch=resolved.batch,
+        provider_budget=resolved.provider_budget,
+    )
+    assert result.state == "committed"
+    assert optional.read_text().startswith("# Optional context")
+
+
+def test_retry_that_cannot_fit_required_sources_never_calls_provider(vault, monkeypatch):
+    import compile_memory as compiler
+
+    root, state_root = vault
+    batch, adapters, _optional = _packed_retry_fixture(root, monkeypatch)
+    attempt = compiler._CompileAttempt(batch.inputs, CompileCache(state_root), batch, adapters)
+    attempt.validation_feedback = "x" * batch.packing.max_input_tokens
+    monkeypatch.setattr(compiler, "call_candidate", lambda *a, **kw: pytest.fail("oversized call"))
+    assert attempt._drafted(_provider(), (None, None)) is None
+    assert attempt.inputs.dailies == batch.inputs.dailies
+    assert attempt.inputs.targets == batch.inputs.targets
     assert attempt.lineage[-1].endswith(":input_budget")
