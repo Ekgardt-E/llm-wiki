@@ -5,6 +5,8 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from functools import partial
 
@@ -24,7 +26,6 @@ from tests.adopted_capture_vault import adopted_capture_vault, published_intents
 def delivery(tmp_path, monkeypatch):
     state_root, _ = adopted_capture_vault(tmp_path, monkeypatch, integration_adapter)
     monkeypatch.setenv("LLM_WIKI_STATE_ROOT", str(state_root))
-    monkeypatch.setattr(flush_memory, "STATE_ROOT", state_root)
     monkeypatch.setattr(integration_adapter, "spawn_detached", lambda *a, **k: None)
     monkeypatch.setattr(
         flush_memory,
@@ -52,7 +53,11 @@ def _publish_prompt():
     return queue_breadcrumb("user_prompt", "demo", "session-a", {"preview": "original"}, "one")
 
 
-def test_breadcrumb_reuses_its_validated_coordinator(delivery, monkeypatch):
+def _pending_intents(state_root):
+    return sorted((state_root / "run/capture-intents/pending").glob("*/*.json"))
+
+
+def test_breadcrumb_retention_does_not_wait_for_a_database(delivery, monkeypatch):
     import markdown_transaction
 
     opened = []
@@ -65,22 +70,26 @@ def test_breadcrumb_reuses_its_validated_coordinator(delivery, monkeypatch):
 
     monkeypatch.setattr(markdown_transaction, "active_markdown_coordinator", open_coordinator)
     assert _publish_prompt()
-    assert len(opened) == 1
-    assert len(published_intents(delivery[1])) == 1
+    assert opened == []
+    assert len(_pending_intents(delivery[1])) == 1
     _work(delivery)
+    assert len(published_intents(delivery[1])) == 1
+    assert _pending_intents(delivery[1]) == []
     assert "original" in next((delivery[0] / "knowledge/daily").glob("*.md")).read_text()
 
 
-def test_invalid_coordinator_is_refused_before_accepting_a_breadcrumb(delivery, monkeypatch):
+def test_invalid_coordinator_cannot_publish_a_retained_breadcrumb(delivery, monkeypatch):
     import markdown_transaction
 
     def invalid(*args):
         raise ValueError("coordinator validation failed")
 
     monkeypatch.setattr(markdown_transaction, "active_markdown_coordinator", invalid)
+    assert _publish_prompt()
     with pytest.raises(ValueError, match="coordinator validation failed"):
-        _publish_prompt()
+        integration_adapter._run_active_capture_worker_once()
     assert published_intents(delivery[1]) == []
+    assert len(_pending_intents(delivery[1])) == 1
 
 
 def test_state_recovery_keeps_the_same_native_operation_id(monkeypatch):
@@ -111,7 +120,7 @@ def test_replay_after_midnight_keeps_original_time_and_only_one_append(delivery,
     after = datetime.fromisoformat("2026-09-30T01:00:00+03:00")
     monkeypatch.setattr(iso_time, "local_now", lambda: before)
     _publish_prompt()
-    original = published_intents(state_root)[0].read_bytes()
+    original = _pending_intents(state_root)[0].read_bytes()
     monkeypatch.setattr(iso_time, "local_now", lambda: after)
     _publish_prompt()
     _work(delivery)
@@ -122,6 +131,7 @@ def test_replay_after_midnight_keeps_original_time_and_only_one_append(delivery,
 
 
 def test_ready_intent_survives_failed_dispatch_and_is_adopted(delivery, monkeypatch):
+    from capture_adoption import complete_pending_capture_intents
     from memory_queue import _QueueV3CandidateReader
 
     root, state_root, _, _ = delivery
@@ -132,6 +142,8 @@ def test_ready_intent_survives_failed_dispatch_and_is_adopted(delivery, monkeypa
 
     monkeypatch.setattr(_QueueV3CandidateReader, "enqueue_capture_task_replay_safe", fail_dispatch)
     assert _publish_prompt()
+    outcome = complete_pending_capture_intents(delivery[2], delivery[3], state_root=state_root)
+    assert len(outcome["skipped"]) == 1
     assert len(published_intents(state_root)) == 1
     monkeypatch.setattr(_QueueV3CandidateReader, "enqueue_capture_task_replay_safe", original)
     _work(delivery)
@@ -142,7 +154,7 @@ def test_failure_before_retention_is_not_acknowledged(delivery, monkeypatch):
     def fail_before_publish(*args, **kwargs):
         raise OSError("disk unavailable")
 
-    monkeypatch.setattr(integration_adapter, "_publish_capture_files_and_task", fail_before_publish)
+    monkeypatch.setattr("reliable_memory.publish_runtime_file", fail_before_publish)
     with pytest.raises(OSError, match="disk unavailable"):
         _publish_prompt()
     assert published_intents(delivery[1]) == []
@@ -169,10 +181,13 @@ def test_dead_publisher_is_recovered_by_a_fresh_worker(delivery, monkeypatch):
 
     program = """
 import os
+import integration_adapter
 from memory_queue import _QueueV3CandidateReader
 from breadcrumb_capture import queue_breadcrumb
+integration_adapter.spawn_detached = lambda *a, **k: None
 _QueueV3CandidateReader.enqueue_capture_task_replay_safe = lambda *a, **k: os._exit(86)
 queue_breadcrumb('user_prompt', 'demo', 'session-a', {'preview': 'survives process death'}, 'crash:one')
+integration_adapter._run_active_capture_worker_once()
 """
     env = {**os.environ, "PYTHONPATH": str(integration_adapter.SCRIPTS_DIR)}
     exited = subprocess.run(
@@ -192,9 +207,37 @@ queue_breadcrumb('user_prompt', 'demo', 'session-a', {'preview': 'survives proce
     assert daily.read_text().count("survives process death") == 1
 
 
+def test_death_before_database_validation_keeps_the_breadcrumb(delivery):
+    from capture_adoption import complete_pending_capture_intents
+
+    program = """
+import os
+import markdown_transaction
+import integration_adapter
+from breadcrumb_capture import queue_breadcrumb
+markdown_transaction.active_markdown_coordinator = lambda *a: os._exit(86)
+integration_adapter._wake_capture_worker = lambda *a: os._exit(86)
+queue_breadcrumb('user_prompt', 'demo', 'session-a', {'preview': 'retained before DB'}, 'crash:early')
+"""
+    env = {**os.environ, "PYTHONPATH": str(integration_adapter.SCRIPTS_DIR)}
+    exited = subprocess.run([sys.executable, "-c", program], env=env, capture_output=True, timeout=5)
+    assert exited.returncode == 86, exited.stderr.decode()
+    pending = list((delivery[1] / "run/capture-intents/pending").glob("*/*.json"))
+    assert len(pending) == 1
+    outcome = complete_pending_capture_intents(
+        delivery[2], delivery[3], state_root=delivery[1],
+        now=datetime.now().astimezone() + timedelta(hours=1),
+    )
+    assert len(outcome["completed"]) == 1
+    assert outcome["skipped"] == []
+    _work(delivery)
+    daily = next((delivery[0] / "knowledge/daily").glob("*.md"))
+    assert daily.read_text().count("retained before DB") == 1
+    assert _work(delivery) is None
+
+
 def test_retry_reuses_the_published_renderer_decision(delivery, monkeypatch):
     import breadcrumb_capture
-    import memory_queue
 
     _publish_prompt()
     original = flush_memory._complete_capture_decision
@@ -206,9 +249,9 @@ def test_retry_reuses_the_published_renderer_decision(delivery, monkeypatch):
     with pytest.raises(RuntimeError, match="decision was saved"):
         _work(delivery)
     with sqlite3.connect(delivery[2].db_path) as database:
-        available = database.execute("SELECT available_at FROM tasks").fetchone()[0]
-    retry_at = datetime.fromisoformat(available) + timedelta(seconds=1)
-    monkeypatch.setattr(memory_queue, "_utc_now", lambda: retry_at)
+        # Make the saved retry eligible without putting queue time ahead of the
+        # independently clocked canonical owner and intent fences.
+        database.execute("UPDATE tasks SET available_at=?", (datetime.now().astimezone().isoformat(),))
     monkeypatch.setattr(flush_memory, "_complete_capture_decision", original)
     monkeypatch.setattr(breadcrumb_capture, "_decision", lambda *a: pytest.fail("decision rebuilt"))
     terminal_path = _work(delivery)
@@ -224,8 +267,61 @@ def test_same_operation_cannot_change_its_payload(delivery):
     _publish_prompt()
     with pytest.raises(ValueError, match="different content"):
         queue_breadcrumb("user_prompt", "demo", "session-a", {"preview": "replacement"}, "one")
-    record = json.loads(published_intents(delivery[1])[0].read_bytes())
+    record = json.loads(_pending_intents(delivery[1])[0].read_bytes())
     assert "original" in record["evidence"][0]["parts"][0]["text"]
+
+
+def test_concurrent_breadcrumb_publishers_reuse_one_source(delivery, monkeypatch):
+    import reliable_memory
+
+    barrier = threading.Barrier(2)
+    original = reliable_memory.publish_runtime_file
+
+    def together(*args, **kwargs):
+        barrier.wait(timeout=5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(reliable_memory, "publish_runtime_file", together)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: _publish_prompt(), range(2)))
+    monkeypatch.setattr(reliable_memory, "publish_runtime_file", original)
+    assert results == [True, True]
+    assert len(_pending_intents(delivery[1])) == 1
+    _work(delivery)
+    assert _work(delivery) is None
+    daily = next((delivery[0] / "knowledge/daily").glob("*.md"))
+    assert daily.read_text().count("original") == 1
+
+
+def test_bad_unindexed_intent_does_not_hide_a_valid_breadcrumb(delivery):
+    from capture_adoption import complete_pending_capture_intents
+
+    assert _publish_prompt()
+    bad = delivery[1] / ("run/capture-intents/pending/00/" + "0" * 64 + ".json")
+    bad.parent.mkdir(mode=0o700, exist_ok=True)
+    bad.write_bytes(b"{}")
+    bad.chmod(0o600)
+    outcome = complete_pending_capture_intents(
+        delivery[2], delivery[3], state_root=delivery[1], limit=1,
+    )
+    assert len(outcome["completed"]) == 1
+    assert len(outcome["skipped"]) == 1
+    assert bad.exists()
+    _work(delivery)
+    assert "original" in next((delivery[0] / "knowledge/daily").glob("*.md")).read_text()
+
+
+def test_unindexed_source_tampering_is_refused_before_queue_publication(delivery):
+    from capture_adoption import complete_pending_capture_intents
+
+    assert _publish_prompt()
+    pending = _pending_intents(delivery[1])[0]
+    pending.write_bytes(pending.read_bytes().replace(b"original", b"tampered"))
+    outcome = complete_pending_capture_intents(delivery[2], delivery[3], state_root=delivery[1])
+    assert outcome["completed"] == []
+    assert len(outcome["skipped"]) == 1
+    assert published_intents(delivery[1]) == []
+    assert pending.exists()
 
 
 def test_renderer_decision_cannot_change_source_bytes(delivery):
@@ -261,8 +357,10 @@ def test_completed_synchronous_capture_is_not_duplicated_after_upgrade(
         {"preview": "original"},
         legacy_id.replace(":fallback:", ":", 1),
     )
+    assert _work(delivery) is None
     daily = next((root / "knowledge/daily").glob("*.md"))
     assert (published_intents(state_root), daily.read_text().count("original")) == ([], 1)
+    assert _pending_intents(state_root) == []
 
 
 @pytest.mark.shipped_append_budgets
@@ -300,9 +398,37 @@ def test_writer_contention_retains_the_event_for_a_worker(tmp_path, monkeypatch,
     holder = active_markdown_coordinator(integration_adapter.ROOT, state_root)
     with holder.writer_gate():
         accepted = calls[kind]()
-        retained = published_intents(state_root)
+        retained = _pending_intents(state_root)
     assert (accepted, len(retained)) == (True, 1), errors
     worker = partial(flush_memory.process_new_capture, queue, coordinator)
     flush_memory.run_capture_worker_once(queue, coordinator, process_missing=worker)
     daily = list((integration_adapter.ROOT / "knowledge/daily").glob("*.md"))
     assert len(daily) == 1
+
+
+def test_unindexed_ingress_is_backed_up_and_blocks_runtime_deletion(delivery, tmp_path):
+    import time
+
+    import installed_memory_repair as repair
+    import private_vault_backup as backup
+
+    from tests.slow_machine import SHORT_TIMEOUT
+
+    root, state_root, queue, _ = delivery
+    assert _publish_prompt()
+    pending = _pending_intents(state_root)[0]
+    original = pending.read_bytes()
+    assert queue.capture_intent_record(pending.stem) is None
+    assert "capture_intent_retained" in repair._queue_artifact_blockers(
+        state_root, time.monotonic() + SHORT_TIMEOUT
+    )
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    with backup.staged_backup_image(
+        root=root, state_root=state_root, staging_parent=staging,
+        deadline=time.monotonic() + SHORT_TIMEOUT,
+    ) as image:
+        copied = image / "state" / pending.relative_to(state_root)
+        assert copied.read_bytes() == original
+    _work(delivery)
+    assert "original" in next((root / "knowledge/daily").glob("*.md")).read_text()

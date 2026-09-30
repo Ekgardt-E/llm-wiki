@@ -32,9 +32,9 @@ existing schemas and actual runtime failure trail were checked directly.
   explains the ambiguous-acknowledgment case: a publisher may fail after the
   broker accepted a message. Retry identity must survive this ambiguity.
 - [SQLite atomic commit](https://www.sqlite.org/atomiccommit.html) explains the
-  rollback journal's durability and synchronization requirements. The installed
-  local operational databases already use that supported mechanism with FULL
-  synchronization; this change introduces neither WAL nor another database.
+  rollback journal's durability and synchronization principles. Its rollback-specific
+  algorithm is not the installed WAL algorithm; local databases already use WAL/FULL.
+  This change introduces neither a journal-mode migration nor another database.
 
 These sources support the principles, not a claim that they prove this local
 implementation. The fault tests supply that evidence.
@@ -113,3 +113,49 @@ tests remain required. Local Lizard and AST checks enforce CCN <= 5, at most two
 if statements per changed function, and at most two levels of conditional/loop
 nesting. Installation and the live acceptance result are recorded privately in
 the existing audit report rather than inferred from CI.
+
+
+## Follow-up: retain before opening operational databases (2026-09-30)
+
+The first fix still opened the validated coordinator before saving the intent.
+The delegate can terminate at 3.5 seconds, while admission may retry for 30 seconds;
+one real cold queue/coordinator opening took 0.955 seconds. A child-process exit
+at that boundary reproduces an empty pending directory on the previous version.
+A retained operation identifier alone cannot recover the missing source bytes.
+
+The hook now creates and synchronizes the same immutable pending file before any
+operational database opening, then wakes the existing worker. The worker discovers
+unindexed pending files and runs the unchanged validated ownership, intent-fence,
+hash-bound publication and queue protocol. Fresh unindexed ingress is immediately
+eligible; interrupted indexed publishers retain their existing stale-owner rules.
+Invalid coordinator state still prevents publication, but does not discard input.
+A concurrent producer must validate and synchronize the retained canonical record
+before acknowledging it. Changed bytes under the same occurrence remain an error.
+
+Additional primary sources fetched for this decision:
+- [Transactional outbox pattern](https://microservices.io/patterns/data/transactional-outbox.html):
+  durable messages precede relay and consumers must handle repeated delivery.
+- [PostgreSQL WAL introduction](https://www.postgresql.org/docs/current/wal-intro.html):
+  recoverable durable evidence precedes the state change it supports. This is a
+  durability principle, not a proposal to introduce PostgreSQL.
+- [SQLite atomic commit](https://www.sqlite.org/atomiccommit.html): file and directory
+  synchronization are part of a durable acknowledgment, not merely a successful write.
+
+A longer host timeout does not remove the durability gap. Skipping database
+validation would weaken publication. A second outbox, lock, or daemon is unnecessary:
+the existing pending files and fenced relay already provide the required boundary.
+The replaced synchronous breadcrumb publisher and its unused payload callback are
+removed. Session capture, saved ready/indexed-pending records, deterministic worker
+rendering, and the model contract remain compatible.
+
+Backup already snapshots capture-intents independently of its owner fence, by the
+owner's September 27 decision. An unindexed pending record is included byte-for-byte;
+the existing filesystem-based deletion proof reports capture_intent_retained even
+without a queue row. Worker sweeps use their supplied queue's state root, preventing
+an isolated or restored queue from accidentally scanning another runtime.
+
+Guards cover death before database opening followed by real worker completion,
+two concurrent producers, unchanged first timestamp, tampered input, an invalid
+unindexed head with valid work behind it, legacy completed receipts, held Markdown
+writer, backup retention and deletion refusal. Historical failed hook occurrences
+are not retroactively declared delivered by installing this repair.

@@ -73,15 +73,15 @@ def _verified_prior(source, prior):
     return prior
 
 
-def _publish(source, root, state_root, coordinator):
+def _stage_before_database(source, state_root):
+    """Keep the immutable input before any potentially contended database open."""
     from integration_adapter import (
         _capture_relative_paths,
         _encoded_capture_record,
         _ensure_capture_intent_directories,
-        _publish_capture_files_and_task,
     )
-    from memory_queue import active_memory_queue
     from memory_state import MAX_CAPTURE_INTENT_BYTES
+    from reliable_memory import publish_runtime_file, sync_runtime_directory
 
     record, encoded = _encoded_capture_record(source)
     if len(encoded) > MAX_CAPTURE_INTENT_BYTES:
@@ -89,52 +89,40 @@ def _publish(source, root, state_root, coordinator):
     intent_id = record["intent_id"]
     pending, ready = _capture_relative_paths(intent_id)
     _ensure_capture_intent_directories(state_root, intent_id)
-    queue = active_memory_queue(root, state_root)
+    retained = _reuse_record(source, None, state_root, pending, ready)
+    if retained is not None:
+        sync_runtime_directory((state_root / pending).parent)
+        sync_runtime_directory((state_root / ready).parent)
+        return intent_id
     try:
-        _publish_capture_files_and_task(
-            queue,
-            coordinator,
-            intent_id=intent_id,
-            payload=encoded,
-            intent_sha256=sha256_bytes(encoded),
-            pending_relative=pending,
-            ready_relative=ready,
-            resolve_payload=lambda data: _reuse_record(source, data, state_root, pending, ready),
+        publish_runtime_file(
+            state_root / pending, encoded, state_root=state_root, create_only=True, mode=0o600,
         )
-    except Exception as error:
-        _require_retained_after_failure(source, state_root, pending, ready, error)
+    except (OSError, RuntimeError, ValueError) as error:
+        _require_concurrent_retention(source, state_root, pending, ready, error)
     return intent_id
 
 
-def _require_retained_after_failure(source, state_root, pending, ready, error):
-    from capture_diagnostics import record_capture_failure
+def _require_concurrent_retention(source, state_root, pending, ready, error):
+    from reliable_memory import sync_runtime_directory
 
     if _reuse_record(source, None, state_root, pending, ready) is None:
         raise error
-    record_capture_failure(
-        "breadcrumb_dispatch",
-        f"{type(error).__name__}: {error}",
-        error=error,
-        slug=source["project_slug"],
-        session_id=source["session"],
-    )
+    sync_runtime_directory((state_root / pending).parent)
+    sync_runtime_directory((state_root / ready).parent)
 
 
 def queue_breadcrumb(event, slug, session, details, operation_id) -> bool:
     """True means durably accepted; an unadopted vault keeps its v2 writer."""
     from integration_adapter import _wake_capture_worker
-    from markdown_transaction import _reliability_v3_records_present, active_markdown_coordinator
-    from memory_state import ROOT, STATE_ROOT
+    from markdown_transaction import _reliability_v3_records_present
+    from memory_state import STATE_ROOT
 
-    root = Path(os.environ.get("LLM_WIKI_ROOT", ROOT)).resolve()
     state_root = Path(os.environ.get("LLM_WIKI_STATE_ROOT", STATE_ROOT)).resolve()
     if not _reliability_v3_records_present(state_root):
         return False
-    coordinator = active_markdown_coordinator(root, state_root)
-    if _legacy_recorded(root, coordinator, operation_id):
-        return True
     source = _source(event, slug, session, details, operation_id or uuid.uuid4().hex)
-    intent_id = _publish(source, root, state_root, coordinator)
+    intent_id = _stage_before_database(source, state_root)
     _wake_capture_worker({}, intent_id)
     return True
 

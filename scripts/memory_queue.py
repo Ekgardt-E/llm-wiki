@@ -7795,6 +7795,14 @@ class _QueueV3CandidateReader:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def capture_intent_record(self, intent_id: str) -> dict[str, object] | None:
+        """The authoritative publication row, including a ready row during recovery."""
+        with closing(self._connect()) as database:
+            row = database.execute(
+                "SELECT * FROM capture_intents WHERE intent_id=?", (intent_id,)
+            ).fetchone()
+        return dict(row) if row is not None else None
+
     def pending_capture_intents(
         self, limit: int, older_than: str | None = None
     ) -> list[dict[str, object]]:

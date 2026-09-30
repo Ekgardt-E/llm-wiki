@@ -32,7 +32,6 @@ from iso_time import local_now  # noqa: E402
 from memory_state import (  # noqa: E402
     MAX_CAPTURE_INTENT_BYTES,
     ROOT,
-    STATE_ROOT,
 )
 from secret_redact import redact_secrets  # noqa: E402
 
@@ -1386,7 +1385,7 @@ def _swept_intents(sweep, queue: object, coordinator: object) -> None:
     `docs/research/2026-09-17-a-publication-that-stopped-half-way-is-finished.md`.
     """
     try:
-        result = sweep(queue, coordinator, state_root=Path(STATE_ROOT))
+        result = sweep(queue, coordinator, state_root=Path(queue.state_root))
     except Exception as error:  # noqa: BLE001 - recovery must not break the worker
         _count_dropped_capture("capture_adoption", error, None)
         return
