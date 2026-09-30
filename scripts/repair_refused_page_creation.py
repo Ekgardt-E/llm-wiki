@@ -21,6 +21,11 @@ the operation is a `create` (a `replace` would overwrite whatever is there
 now), the target does not exist today, the recorded after-image still hashes
 to what the plan recorded, and the path is under `knowledge/`. Anything else
 is left alone and reported. On a vault with nothing owed it does nothing.
+
+Compile receipts are transaction authority, not ordinary pages. A batch that
+contains one is refused before any write: only its original compile transaction
+may establish completion. Replaying receipt bytes under a repair identity would
+make the next compile reject the receipt as corrupt.
 """
 
 from __future__ import annotations
@@ -124,7 +129,17 @@ def _collect(coordinator, vault: Path) -> list[tuple[str, str, bytes]]:
     return found
 
 
+def _require_page_replay(owed: list[tuple[str, str, bytes]]) -> None:
+    for _, path, _ in owed:
+        if Path(path).is_relative_to("knowledge/daily/receipts"):
+            raise ValueError(
+                "Compile receipts require the original compile transaction; "
+                "resume compilation instead of replaying receipt files."
+            )
+
+
 def _restore(vault: Path, owed: list[tuple[str, str, bytes]]) -> None:
+    _require_page_replay(owed)
     for identifier, path, content in owed:
         record = mutate_knowledge(
             f"repair-refused-create:{identifier}:{sha256_bytes(content)}",
