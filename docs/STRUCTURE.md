@@ -364,8 +364,16 @@ reports an unconditional legacy-protocol blocker. The snapshot is not a durable 
 
 Operational migrations execute individual statements under explicit transactions,
 verify their complete invariant on every startup, and remain restartable after any
-statement. Operational databases remain rollback-journal, `synchronous=FULL`, local
-filesystem only, and no WAL. The listed v3 paths remain unavailable to normal runtime
+statement. Operational databases remain local-filesystem-only with `synchronous=FULL`.
+The owner authorized qualified WAL preparation for the two adopted v3 databases
+on 2026-09-30; this is not evidence of live cutover. The target preserves journal
+mode during ordinary opens and rejects unsafe SQLite versions and sidecars.
+Migration must quiesce canonical owners, durably coordinate both database modes
+with their adoption manifest, and resume or roll back after interruption.
+Migration evidence belongs under the existing `run/install/` directory.
+SQLite online backup and staged restore must pass before live migration.
+Other databases retain rollback-journal mode. See
+`knowledge/notes/operational-wal-preparation-20260930.md`. The listed v3 paths remain unavailable to normal runtime
 mutation until offline adoption, producer, replay, terminal, recovery, purge, and
 complexity verification pass. See
 `knowledge/notes/v4-reliability-contracts-decision.md` and

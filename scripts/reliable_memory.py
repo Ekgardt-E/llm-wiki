@@ -477,11 +477,12 @@ def open_operational_db(
     contract: OperationalDatabaseContract | None = None,
     initialize_contract: bool = False,
 ) -> sqlite3.Connection:
-    """Open an owner-restricted rollback-journal operational database."""
+    """Open an owner-restricted database without changing its journal mode."""
     _require_operational_open_arguments(busy_ms, contract, initialize_contract)
     path = Path(path)
     validate_state_root(path.parent)
     expected = _operational_db_identity(path)
+    _validate_operational_sidecars(path, path.parent)
     connection = sqlite3.connect(
         path,
         timeout=busy_ms / 1_000,
@@ -532,12 +533,62 @@ def _operational_db_identity(path: Path) -> os.stat_result:
     return path.stat(follow_symlinks=False)
 
 
+# Only the two adopted v3 protocols have an authorized WAL migration path.
+_WAL_APPLICATION_IDS = frozenset((0x4C575433, 0x4C575133))
+_WAL_RESET_BACKPORTS = {(3, 44): 6, (3, 50): 7}
+
+
+def require_safe_wal_runtime() -> None:
+    """Reject SQLite releases affected by the upstream WAL-reset corruption bug."""
+    version = sqlite3.sqlite_version_info
+    if version >= (3, 51, 3):
+        return
+    minimum = _WAL_RESET_BACKPORTS.get(version[:2])
+    if minimum is not None and version[2] >= minimum:
+        return
+    raise OperationalDatabaseContractError("WAL requires a SQLite WAL-reset fix")
+
+
+def _require_operational_journal_mode(connection: sqlite3.Connection) -> None:
+    mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).casefold()
+    if mode == "delete":
+        return
+    if mode != "wal":
+        raise OperationalDatabaseContractError(f"unsupported journal_mode: {mode}")
+    _require_wal_protocol(connection)
+
+
+def _require_wal_protocol(connection: sqlite3.Connection) -> None:
+    require_safe_wal_runtime()
+    application_id = _pragma_integer(connection, "application_id")
+    if application_id not in _WAL_APPLICATION_IDS:
+        raise OperationalDatabaseContractError("WAL is not authorized for this database")
+    if _pragma_integer(connection, "user_version") != 3:
+        raise OperationalDatabaseContractError("WAL requires an adopted v3 database")
+
+
+def _validate_operational_sidecars(path: Path, state_root: Path) -> None:
+    for suffix in ("-wal", "-shm"):
+        _validate_operational_sidecar(Path(str(path) + suffix), state_root)
+
+
+def _validate_operational_sidecar(path: Path, state_root: Path) -> None:
+    # Metadata only: closing another descriptor could strip SQLite's POSIX locks.
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return
+    path.parent.resolve(strict=True).relative_to(Path(state_root).resolve(strict=True))
+    _require_bounded_regular_file(path, metadata, metadata.st_size)
+    _require_owner_only_file(path, metadata)
+    if metadata.st_nlink != 1:
+        raise PermissionError("SQLite sidecar must not have additional hard links")
+
+
 def _apply_operational_pragmas(connection: sqlite3.Connection, busy_ms: int) -> None:
     connection.row_factory = sqlite3.Row
     connection.execute(f"PRAGMA busy_timeout={busy_ms:d}")
-    mode = connection.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
-    if str(mode).casefold() != "delete":
-        raise sqlite3.OperationalError(f"SQLite refused journal_mode=DELETE: {mode}")
+    _require_operational_journal_mode(connection)
     connection.execute("PRAGMA synchronous=FULL")
     connection.execute("PRAGMA foreign_keys=ON")
     connection.execute("PRAGMA trusted_schema=OFF")
@@ -560,6 +611,7 @@ def _configure_operational_connection(
     if not os.path.samestat(expected, current):
         raise PermissionError("operational database identity changed while opening")
     _apply_operational_pragmas(connection, busy_ms)
+    _validate_operational_sidecars(path, path.parent)
     if contract is not None:
         _validate_or_initialize_operational_contract(
             connection,
@@ -912,6 +964,7 @@ def _opened_readonly_operational_db(
     expected = validate_operational_db_file(
         path, state_root, max_bytes=max_bytes, owner_only=owner_only
     )
+    _validate_operational_sidecars(Path(path), state_root)
     database = sqlite3.connect(
         f"{Path(path).resolve(strict=True).as_uri()}?mode=ro",
         uri=True,
@@ -923,6 +976,7 @@ def _opened_readonly_operational_db(
         if not os.path.samestat(expected, current):
             raise PermissionError("runtime database identity changed while opening")
         _apply_readonly_operational_pragmas(database, busy_ms)
+        _validate_operational_sidecars(Path(path), state_root)
         if contract is not None:
             _validate_or_initialize_operational_contract(
                 database, contract, initialize=False
@@ -941,11 +995,7 @@ def _apply_readonly_operational_pragmas(
     database.execute("PRAGMA foreign_keys=ON")
     database.execute("PRAGMA trusted_schema=OFF")
     database.execute("PRAGMA query_only=ON")
-    mode = database.execute("PRAGMA journal_mode").fetchone()[0]
-    if str(mode).casefold() != "delete":
-        raise OperationalDatabaseContractError(
-            f"operational database journal_mode mismatch: expected delete, got {mode}"
-        )
+    _require_operational_journal_mode(database)
     _require_pragma(database, "synchronous", 2)
     _require_pragma(database, "foreign_keys", 1)
     _require_pragma(database, "trusted_schema", 0)
