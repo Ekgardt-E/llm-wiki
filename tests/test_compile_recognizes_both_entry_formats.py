@@ -80,9 +80,9 @@ def test_references_to_one_historical_part_share_the_digest_search(tmp_path, mon
     searched = []
     original = evidence.compile_part_slice
 
-    def search(content, digest):
+    def search(content, digest, **kwargs):
         searched.append(digest)
-        return original(content, digest)
+        return original(content, digest, **kwargs)
 
     monkeypatch.setattr(evidence, "compile_part_slice", search)
     assert resolver.resolve(first).bytes == b"first evidence"
@@ -117,7 +117,7 @@ def test_appending_a_day_does_not_repeat_a_verified_historical_search(tmp_path, 
     resolver, daily, reference = _historical_resolver(tmp_path)
     assert resolver.resolve(reference).bytes == b"first evidence"
 
-    def unexpected_search(*args):
+    def unexpected_search(*args, **kwargs):
         pytest.fail("append discarded a verified historical slice")
 
     monkeypatch.setattr(evidence, "compile_part_slice", unexpected_search)

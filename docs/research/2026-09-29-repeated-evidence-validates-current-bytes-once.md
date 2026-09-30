@@ -104,3 +104,49 @@ requires a fresh successful retry. It now additionally records three full index
 rebuilds using one resolver. The old code performs those rebuilds with two
 resolvers and fails that assertion. The continuously moving tree test must still
 refuse publication, and existing source-tamper and no-claims cases remain required.
+
+## Cold searches prioritize the reference's own entry (2026-09-30)
+
+A real saved compile plan exposed a cold claim-index rebuild spending minutes in
+`_slice_from`: each historical digest tried every earlier entry start, hashing
+candidate endings at each start. The existing memo helps repeated references,
+but cannot help the first lookup in a new resolver. A profiled assessment took
+512.638 seconds cold and 4.056 seconds on its second pass. That comparison also
+changed retrieval-only context and is not an isolated measurement of this fix;
+the one auxiliary search took 0.837 seconds. Stack samples directly identified
+the historical-slice enumeration.
+
+Three independent primary sources checked today inform the choice:
+
+- [NIST FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
+  defines the SHA-256 integrity primitive. The actual historical bytes must still
+  match the recorded digest; locator metadata is not proof.
+- [RFC 9162](https://www.rfc-editor.org/rfc/rfc9162.html), the experimental
+  Certificate Transparency v2 protocol, supersedes RFC 6962 and distinguishes
+  locating entries from cryptographically proving their inclusion/consistency.
+  This local store does not claim to implement CT or a Merkle proof.
+- [Python bisect](https://docs.python.org/3/library/bisect.html)
+  specifies the ordered partition bounds used to select candidate starts. The
+  installed Python 3.14.6 provides both bisect operations without new dependencies.
+
+An evidence reference already names an entry and its half-open span relative to
+the historical part. For an entry at `[a,b)` and reference span `[s,e)`, a valid
+part start lies in `[a-s,b-e]`. Search entry-aligned starts in those ranges first,
+including every matching repeated block id, then all other original starts.
+Every candidate still undergoes the unchanged SHA-256 check; block, UTF-8, quote,
+and span validation still follow. The fallback preserves old malformed-reference
+errors and prevents a bad locator from poisoning the digest-only negative cache.
+
+Rejected alternatives: keeping an index across every compile batch adds lifetime
+coupling without solving cold lookup; persisting locator caches adds migration
+and invalidation work; trusting offsets or removing fallback weakens validation.
+Ordering the existing search is compatible with old and new references, daily
+appends and started runs. It changes no schema, paths, environment contract,
+runtime location, dependencies or limits. Archives retain their manifest-defined
+start search. The cost is one entry scan per uncached digest; the benefit is not
+hashing unrelated earlier entries first.
+
+The regression's old code returned the correct bytes but tried 501 starts before
+doing so. The new code must prove those same bytes with the relevant start first.
+Additional cases cover repeated ids, invalid locators followed by a valid
+reference on the same resolver, and existing append/tamper/cache protections.

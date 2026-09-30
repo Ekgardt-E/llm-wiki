@@ -677,9 +677,9 @@ def test_lint_reuses_historical_search_across_prose_and_claim_checks(
     searched = []
     original = evidence_resolver.compile_part_slice
 
-    def search(content, digest):
+    def search(content, digest, **kwargs):
         searched.append(digest)
-        return original(content, digest)
+        return original(content, digest, **kwargs)
 
     monkeypatch.setattr(evidence_resolver, "compile_part_slice", search)
     result = lint_memory._page_checks("notes", [page], tmp_path / "index.md", 200)

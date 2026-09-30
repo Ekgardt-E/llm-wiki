@@ -6,7 +6,7 @@ import json
 import os
 import re
 import stat
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -1148,7 +1148,9 @@ def _slice_from(content: bytes, start: int, digest: str, ends: list[int]) -> byt
     return None
 
 
-def compile_part_slice(content: bytes, digest: str) -> bytes | None:
+def compile_part_slice(
+    content: bytes, digest: str, *, reference: EvidenceRef | None = None,
+) -> bytes | None:
     """The exact bytes one compile part held, in a day that has grown since.
 
     A page is written from one part of a day, so its evidence names that part's
@@ -1160,7 +1162,25 @@ def compile_part_slice(content: bytes, digest: str) -> bytes | None:
     present verbatim and in place, which is the append-only argument a
     transparency log makes with a consistency proof (RFC 6962).
     """
-    return _slice_at(content, _slice_offsets(content), digest)
+    starts = _slice_offsets(content)
+    if reference is not None:
+        starts = _reference_first_starts(content, starts, reference)
+    return _slice_at(content, starts, digest)
+
+
+def _reference_first_starts(content: bytes, starts: list[int], ref: EvidenceRef) -> list[int]:
+    """Use the locator to order work, never to replace the digest proof."""
+    preferred: set[int] = set()
+    for block_id, start, end in daily_entries(content):
+        if block_id == ref.block_id:
+            preferred.update(_containing_part_starts(starts, start, end, ref))
+    return sorted(preferred) + [start for start in starts if start not in preferred]
+
+
+def _containing_part_starts(starts: list[int], start: int, end: int, ref: EvidenceRef) -> list[int]:
+    lower = bisect_left(starts, start - ref.byte_start)
+    upper = bisect_right(starts, end - ref.byte_end)
+    return starts[lower:upper]
 
 
 def _slice_at(content: bytes, starts: list[int], digest: str) -> bytes | None:
@@ -1205,20 +1225,21 @@ class EvidenceResolver:
         current_digest = sha256_bytes(content)
         if current_digest == ref.source_sha256:
             return self._slice(ref, content, flat, "flat")
-        part = self._flat_part(flat, content, ref.source_sha256)
+        part = self._flat_part(flat, content, ref)
         if part is None:
             raise EvidenceResolutionError("flat daily source hash mismatch")
         return self._slice(ref, part, flat, "flat-part")
 
     def _flat_part(
-        self, flat: Path, content: bytes, source_digest: str,
+        self, flat: Path, content: bytes, ref: EvidenceRef,
     ) -> bytes | None:
         """Reuse proven slices after verified append; changed bytes invalidate them."""
         previous, parts = self._flat_parts.get(flat, (b"", {}))
         parts = _reusable_flat_parts(previous, content, parts)
         self._flat_parts[flat] = (content, parts)
+        source_digest = ref.source_sha256
         if source_digest not in parts:
-            parts[source_digest] = compile_part_slice(content, source_digest)
+            parts[source_digest] = compile_part_slice(content, source_digest, reference=ref)
         return parts[source_digest]
 
     def resolve_bytes(
