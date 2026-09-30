@@ -397,7 +397,7 @@
   "test_compile_integration.py": 1.39,
   "test_compile_provider_ceiling.py": 0.01,
   "test_compile_recognizes_both_entry_formats.py": 1.02,
-  "test_compile_transactions.py": 9.75,
+  "test_compile_transactions.py": 11.8,
   "test_conflict_resolution_stand.py": 0.21,
   "test_consolidation_stand.py": 0.06,
   "test_context_budget.py": 0.03,

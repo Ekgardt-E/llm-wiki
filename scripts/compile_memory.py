@@ -3256,18 +3256,33 @@ def _published(
     tree, re-assesses against it, and takes the next attempt ordinal, which is
     the same lineage the append path has always used. A plan whose receipts
     already committed returns from `_existing_receipts` without writing twice.
+
+    This retry can refresh claim assessment, not the immutable inputs the
+    model's plan used. When an existing target changed, return the refusal;
+    its sources stay pending for a fresh planning pass instead of creating
+    identical rejected attempts. See the 2026-09-30 frozen-plan research note.
     """
     refusal: TransactionFailure | None = None
     for _ in range(COMPILE_PUBLICATION_ATTEMPTS):
+        current = publication()
         try:
             return _published_once(
-                publication(), coordinator, owner, deadline, cancelled
+                current, coordinator, owner, deadline, cancelled
             )
         except TransactionFailure as exc:
             if exc.code != "precondition_failed":
                 raise
+            current.require_retryable_inputs(exc)
             refusal = exc
     raise refusal
+
+
+def _current_compile_target_digest(logical_path: str) -> str:
+    try:
+        content = read_stable_bytes(ROOT / logical_path, MAX_SOURCE_BYTES, label="compile target")
+    except FileNotFoundError:
+        return "absent"
+    return sha256_bytes(content)
 
 
 def _utc_now() -> str:
@@ -3344,6 +3359,12 @@ class _ApplyPlan:
         self.parent_transaction_id: str | None = None
 
     # -- claim assessment, outside the writer gate ---------------------------
+
+    def require_retryable_inputs(self, refusal: TransactionFailure) -> None:
+        """A new claim assessment cannot repair a plan based on replaced input bytes."""
+        for target in self.inputs.targets:
+            if _current_compile_target_digest(target.logical_path) != target.sha256:
+                raise refusal
 
     def assess_claims(self) -> None:
         """Assess every claim before the gate; nothing is committed here."""

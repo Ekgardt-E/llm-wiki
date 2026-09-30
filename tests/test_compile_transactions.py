@@ -982,6 +982,50 @@ def _observe_claim_rebuilds(monkeypatch):
     return resolvers
 
 
+@pytest.mark.parametrize("change", ["rewrite", "remove", "create_collision"])
+def test_a_frozen_plan_is_not_retried_after_its_target_snapshot_changes(vault, monkeypatch, change):
+    import compile_memory
+    from markdown_transaction import TransactionFailure
+
+    root, state_root = vault
+    daily = _daily(root)
+    prior = root / "knowledge/notes/prior.md"
+    prior.write_bytes(b"# Prior\n")
+    inputs = compile_memory.snapshot_compile_inputs([daily])
+    target = root / "knowledge/notes/exact-byte-pattern.md"
+    changes = {
+        "rewrite": lambda: prior.write_bytes(b"# Edited externally\n"),
+        "remove": prior.unlink,
+        "create_collision": lambda: target.write_bytes(b"# Created externally\n"),
+    }
+    changes[change]()
+    coordinator = MarkdownCoordinator(root, state_root)
+    original = coordinator.prepare
+    attempts = []
+
+    def prepare(*args, **kwargs):
+        attempts.append(kwargs["operation_id"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(coordinator, "prepare", prepare)
+    with pytest.raises((TransactionFailure, FileExistsError)):
+        compile_memory.apply_compile_plan(
+            inputs, _semantic_plan(), action_key="e" * 64, trigger="manual", coordinator=coordinator,
+        )
+    assert len(attempts) == 1
+    assert not list((root / "knowledge/daily/receipts").glob("*.md"))
+    assert (root / "knowledge/index.md").read_bytes() == b"# Old index\n"
+    if change == "create_collision":
+        assert target.read_bytes() == b"# Created externally\n"
+        return
+    fresh_inputs = compile_memory.snapshot_compile_inputs([daily])
+    recovered = compile_memory.apply_compile_plan(
+        fresh_inputs, _semantic_plan(), action_key="f" * 64, trigger="manual", coordinator=coordinator,
+    )
+    assert recovered.state == "committed"
+    assert compile_memory.read_compile_receipt(fresh_inputs.dailies[0].sha256, coordinator)
+
+
 def test_a_tree_that_never_stops_moving_still_refuses_the_compile(vault, monkeypatch):
     """The retry is bounded: a vault under a continuous writer still fails."""
     root, state_root = vault
