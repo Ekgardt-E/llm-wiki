@@ -51,13 +51,12 @@ _MAX_RECORD_BYTES = 64 * 1024
 # candidate and one retired file per database (four), so 32 means a broken run
 # directory. Past it the listing sets its overflow flag and the check refuses.
 _MAX_OPERATION_ARTIFACTS = 32
-# The same bounds as doctor.MAX_OPERATIONAL_DB_BYTES and MAX_RUNTIME_ENTRIES, whose
-# comments give their basis: both read the same databases and directories. Repeated
-# because doctor imports this module lazily to stay importable without the queue and
-# transaction modules; keep the pairs equal. A scan past a bound raises, never judges
-# from entries unseen. Table rows have no count cap: they are streamed (`_scanned_rows`).
+# The same database bound as doctor.MAX_OPERATIONAL_DB_BYTES, whose
+# comment gives its basis. Repeated because doctor imports this module lazily
+# to stay importable without the queue and transaction modules; keep the pair equal.
+# Runtime directories use the caller deadline, not an activity-dependent count cap.
+# Table rows are likewise streamed (`_scanned_rows`).
 _MAX_OPERATIONAL_DB_BYTES = 256 * 1024 * 1024
-_MAX_RUNTIME_ENTRIES = 10_000
 # The same bound as memory_state.MAX_CAPTURE_INTENT_BYTES (the hook writes intents
 # under it); not imported because memory_state resolves the live state root at
 # import time. The largest intent on the installed vault on 2026-09-27 was 977 392
@@ -1100,8 +1099,6 @@ def _scan_bounded_entries(
     with os.scandir(directory) as scanned:
         for entry in scanned:
             _check_deadline(deadline)
-            if len(entries) >= _MAX_RUNTIME_ENTRIES:
-                raise ValueError("runtime artifact scan exceeded its bound")
             entries.append(_contained_runtime_entry(entry.path, state_root))
     return entries
 

@@ -329,18 +329,18 @@ def test_a_quarantined_transaction_with_a_plan_still_owns_operations(
     assert _corrupt_codes(tmp_path, now) == (True, True)
 
 
-def test_an_undo_listing_past_its_bound_refuses_deletion_without_accusing(
+def test_an_undo_listing_past_old_bound_is_fully_reconciled(
     tmp_path: Path, now: datetime
 ) -> None:
-    """Directories the listing never reached are unknown, not missing."""
-    _build_vault(tmp_path, now, transactions=doctor.MAX_RUNTIME_ENTRIES + 50, operations_each=1)
+    """Every retained directory is compared with the ledger, beyond the old cap."""
+    _build_vault(tmp_path, now, transactions=OLD_SCAN_CAP + 50, operations_each=1)
 
     details = _check(tmp_path, now)["details"]
 
     assert (
         "transaction_artifact_state_unknown" in details["deletion_codes"],
         "transaction_metadata_corrupt" in details["codes"],
-    ) == (True, False)
+    ) == (False, False)
 
 
 def test_filesystem_scan_does_not_hold_the_database_read_lock(tmp_path, now, monkeypatch):
@@ -380,3 +380,48 @@ def test_rows_remain_coherent_when_a_writer_commits_during_file_checks(tmp_path,
 def test_copied_rows_still_obey_the_doctor_deadline():
     with pytest.raises(TimeoutError, match="deadline"):
         list(doctor._checked_snapshot_rows([None], 0))
+
+
+def test_queue_artifacts_past_old_count_cap_are_counted(tmp_path):
+    import time
+
+    directory = tmp_path / "run/queue-results"
+    directory.mkdir(parents=True)
+    for number in range(OLD_SCAN_CAP + 1):
+        (directory / f"{number}.json").write_text("{}")
+    state = doctor._queue_artifact_state(tmp_path, time.monotonic() + 30)
+    assert state["results_retained"] == OLD_SCAN_CAP + 1
+    assert state["artifact_truncated"] is False
+    assert "queue_result_retained" in state["deletion_codes"]
+
+
+def test_installed_runtime_lists_past_old_count_cap(tmp_path):
+    import time
+
+    import installed_memory_repair as repair
+
+    directory = tmp_path / "run/transactions"
+    directory.mkdir(parents=True)
+    for number in range(OLD_SCAN_CAP + 1):
+        (directory / f"{number:032x}").mkdir()
+    entries = repair._bounded_entries(directory, state_root=tmp_path, deadline=time.monotonic() + 30)
+    assert len(entries) == OLD_SCAN_CAP + 1
+
+
+@pytest.mark.parametrize("inspector", ["doctor", "installed"])
+def test_runtime_directory_deadline_still_refuses_incomplete_scan(tmp_path, inspector):
+    import time
+
+    import installed_memory_repair as repair
+
+    directory = tmp_path / "run/queue-results"
+    directory.mkdir(parents=True)
+    (directory / "retained.json").write_text("{}")
+    expired = time.monotonic() - 1
+    if inspector == "installed":
+        with pytest.raises(TimeoutError):
+            repair._bounded_entries(directory, state_root=tmp_path, deadline=expired)
+        return
+    state = doctor._queue_artifact_state(tmp_path, expired)
+    assert state["artifact_truncated"] is True
+    assert "queue_artifact_state_unknown" in state["deletion_codes"]

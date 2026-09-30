@@ -110,11 +110,10 @@ MAX_OPERATIONAL_DB_BYTES = 256 * 1024 * 1024
 # at 29 275 rows the installed vault outgrew it. Basis unknown for the rest: value
 # predates measurement; review when any of those tables nears it.
 MAX_OPERATIONAL_ROWS = 10_000
-# Entries one runtime directory listing takes; past it the scan is reported truncated
-# and deletion stays refused (`archive_scan_truncated`, `artifact_truncated`). Basis
-# unknown: value predates measurement; `run/transactions/` held 5 547 entries on
-# 2026-09-27 — review when a listing nears it.
-MAX_RUNTIME_ENTRIES = 10_000
+# Existing archive bag selection bound; past it archive_scan_truncated refuses
+# deletion. Its historical basis remains unknown and needs review when archives
+# are populated. Live runtime directories now use the caller deadline instead.
+MAX_ARCHIVE_BAGS = 10_000
 # doctor's whole-run budget; one run widens it with --time-budget. basis unknown — value predates measurement; review when checks report budget exhaustion on an idle machine.
 DEFAULT_TIME_BUDGET_SECONDS = 5.0
 # A commit on a rollback-journal database locks readers out for milliseconds.
@@ -487,7 +486,7 @@ def _count_queue_artifact_directory(
     entries, truncated, error = _bounded_runtime_entries(
         state_root / relative,
         state_root,
-        limit=MAX_RUNTIME_ENTRIES,
+        limit=None,
         deadline=deadline,
     )
     details[key] = len(entries)
@@ -616,7 +615,7 @@ def _bounded_runtime_entries(
     directory: Path,
     root: Path,
     *,
-    limit: int,
+    limit: int | None,
     deadline: float,
 ) -> tuple[list[Path], bool, bool]:
     kind, _ = _safe_kind(directory, root)
@@ -627,12 +626,14 @@ def _bounded_runtime_entries(
     return _scanned_entries(directory, limit, deadline)
 
 
-def _entry_budget_spent(entries: list[Path], limit: int, deadline: float) -> bool:
-    return _deadline_reached(deadline) or len(entries) >= limit
+def _entry_budget_spent(entries: list[Path], limit: int | None, deadline: float) -> bool:
+    if _deadline_reached(deadline):
+        return True
+    return limit is not None and len(entries) >= limit
 
 
 def _scanned_entries(
-    directory: Path, limit: int, deadline: float
+    directory: Path, limit: int | None, deadline: float
 ) -> tuple[list[Path], bool, bool]:
     entries: list[Path] = []
     try:
@@ -739,7 +740,7 @@ def _transaction_artifacts(state_root: Path, deadline: float) -> tuple[set[str],
     entries, truncated, error = _bounded_runtime_entries(
         state_root / "run" / "transactions",
         state_root,
-        limit=MAX_RUNTIME_ENTRIES,
+        limit=None,
         deadline=deadline,
     )
     kinds = {entry.name: _artifact_kind(entry, state_root) for entry in entries}
@@ -1194,8 +1195,8 @@ def _checked_artifacts(
 ) -> set[str] | None:
     """The undo artifacts on disk, or None when the listing is incomplete.
 
-    `run/transactions/` is listed under MAX_RUNTIME_ENTRIES; past it (or with an
-    unsafe entry) the names read are not all there are, and a row whose directory
+    `run/transactions/` is listed under the caller deadline. On expiry (or with
+    an unsafe entry) the names read are not all there are, and a row whose directory
     was not listed looked like a row whose directory is missing - corruption
     alleged from an entry never read. The deletion refusal stays; the accusation goes.
     """
@@ -2309,7 +2310,7 @@ def _record_quarantine_state(
     entries, truncated, error = _bounded_runtime_entries(
         quarantine,
         state_root,
-        limit=MAX_RUNTIME_ENTRIES,
+        limit=None,
         deadline=deadline,
     )
     details["quarantined"] = len(entries)
@@ -2353,7 +2354,7 @@ def _is_bag_directory(item: Path, root: Path) -> bool:
 def _record_bag_overflow(details: dict, bags: list[Path]) -> None:
     details["codes"].append("archive_scan_truncated")
     details["deletion_codes"].append("archive_state_unknown")
-    del bags[MAX_RUNTIME_ENTRIES:]
+    del bags[MAX_ARCHIVE_BAGS:]
 
 
 def _collect_month_bags(
@@ -2362,7 +2363,7 @@ def _collect_month_bags(
     entries, truncated, error = _bounded_runtime_entries(
         month,
         root,
-        limit=MAX_RUNTIME_ENTRIES + 1,
+        limit=MAX_ARCHIVE_BAGS + 1,
         deadline=deadline,
     )
     if error:
@@ -2379,7 +2380,7 @@ def _append_bag_directories(
     for item in entries:
         if _is_bag_directory(item, root):
             bags.append(item)
-        if len(bags) > MAX_RUNTIME_ENTRIES:
+        if len(bags) > MAX_ARCHIVE_BAGS:
             _record_bag_overflow(details, bags)
             return
 
@@ -2390,8 +2391,8 @@ def _archive_bags(
     bags: list[Path] = []
     for month in months:
         _collect_month_bags(month, root, deadline, details, bags)
-        if len(bags) >= MAX_RUNTIME_ENTRIES:
-            return bags[:MAX_RUNTIME_ENTRIES]
+        if len(bags) >= MAX_ARCHIVE_BAGS:
+            return bags[:MAX_ARCHIVE_BAGS]
     return bags
 
 
