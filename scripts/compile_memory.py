@@ -2231,7 +2231,10 @@ def _bound_part(
     if len(bound) != 1:
         raise ValueError(
             "compile evidence timestamp block is ambiguous or missing: "
-            f"timestamp {timestamp!r} bound in {len(bound)} of {len(sources)} part(s)"
+            f"timestamp {timestamp!r} bound in {len(bound)} of {len(sources)} part(s); "
+            + _quote_failure_detail(
+                quote_bytes, sum(source.content.count(quote_bytes) for source in sources)
+            )
         )
     return bound[0]
 
