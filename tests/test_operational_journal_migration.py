@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import installed_memory_repair as repair
 import markdown_transaction
@@ -180,7 +181,7 @@ def crash(event):
         os._exit(73)
 migrate(Path(sys.argv[1]), Path(sys.argv[2]), emit=crash)
 '''
-    environment = {**os.environ, 'PYTHONPATH': str(migration.__file__.rsplit('/', 1)[0])}
+    environment = {**os.environ, 'PYTHONPATH': str(Path(migration.__file__).parent)}
     result = subprocess.run([sys.executable, '-c', code, str(root), str(state), phase],
                             env=environment, capture_output=True, text=True, timeout=30)
     assert result.returncode == 73, result.stderr

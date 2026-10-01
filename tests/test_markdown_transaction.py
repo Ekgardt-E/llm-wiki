@@ -1622,9 +1622,9 @@ def test_windows_acl_hardening_failure_is_not_silently_accepted(tmp_path: Path, 
 def test_windows_acl_failure_aborts_transaction_preparation(
     vault: Path, state_root: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    coordinator = MarkdownCoordinator(vault, state_root)
     denied = subprocess.CompletedProcess(["icacls"], 5, b"", b"access denied")
     monkeypatch.setattr(markdown_transaction, "_run_acl_command", lambda command: denied)
-    coordinator = MarkdownCoordinator(vault, state_root)
     with pytest.raises(PermissionError, match="owner-only ACL"):
         coordinator.prepare(
             [MarkdownChange.create("knowledge/notes/new.md", b"new")],
