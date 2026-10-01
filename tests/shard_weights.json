@@ -664,6 +664,7 @@
   "test_slug.py": 0.17,
   "test_slugify.py": 0.01,
   "test_small_corrections_in_the_generations_area.py": 9.55,
+  "test_sqlite_sidecars_inherit_private_windows_access.py": 0.0,
   "test_state_root_identity.py": 1.21,
   "test_stranded_journal_is_replayed.py": 1.02,
   "test_structure.py": 20.47,
