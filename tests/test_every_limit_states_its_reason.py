@@ -42,6 +42,8 @@ REPLACED = {
     # Not a replaced constant: recall and get_decisions had MCP_OPERATION_SECONDS (10 s);
     # 14 s is the budget measured for the reranker (B-9).
     "mcp.retrieval_seconds": 14,
+    "mcp.doctor_seconds": 10,
+    "mcp.doctor_return_seconds": 1,
 }
 RETIRED_NAMES = (
     "MAX_PAGE_COUNT",

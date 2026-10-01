@@ -7,6 +7,7 @@ from pathlib import Path
 import installed_memory_repair as repair
 import pytest
 
+from tests.slow_machine import LONG_TIMEOUT
 from tests.test_the_installed_check_reads_every_row import (
     _INSERT,
     _adopted_with_rows,
@@ -50,7 +51,7 @@ def test_runtime_scan_resolves_root_per_observation(tmp_path, monkeypatch):
         return original(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "resolve", resolve)
-    entries = repair._bounded_entries(directory, state_root=tmp_path, deadline=time.monotonic()+10)
+    entries = repair._bounded_entries(directory, state_root=tmp_path, deadline=time.monotonic() + LONG_TIMEOUT)
     assert len(entries) == 3
     assert resolutions.count(tmp_path) == 2
 
@@ -82,7 +83,7 @@ def test_runtime_root_retargeted_during_scan_is_refused(tmp_path, monkeypatch):
 
     monkeypatch.setattr(repair, "_contained_runtime_entry", retarget)
     with pytest.raises(PermissionError):
-        repair._bounded_entries(original_root, state_root=alias, deadline=time.monotonic()+10)
+        repair._bounded_entries(original_root, state_root=alias, deadline=time.monotonic() + LONG_TIMEOUT)
 
 
 def test_concurrent_unrecorded_artifact_remains_visible(tmp_path, monkeypatch):
