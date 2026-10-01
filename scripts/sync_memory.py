@@ -749,8 +749,15 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"LLM-Wiki sync ({report['mode']}): {report['overall_status']}")
         for action in report["actions"]:
-            print(f"{action['id']}: {action['status']} - {action['message']}")
+            _print_action(action)
     return {"ok": 0, "changed": 0, "degraded": 1, "error": 2}.get(report["overall_status"], 2)
+
+
+def _print_action(action: dict) -> None:
+    print(f"{action['id']}: {action['status']} - {action['message']}")
+    reason = action.get("details", {}).get("reason")
+    if reason:
+        print(f"  reason: {reason}")
 
 
 if __name__ == "__main__":

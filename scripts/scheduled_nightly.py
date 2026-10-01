@@ -587,7 +587,7 @@ def _compile_died_this_pass(state: dict, started_before: str | None) -> bool:
     started = state.get("last_compile_started_at")
     if not started or str(started) == started_before:
         return False
-    return state.get("last_compile_status") == "running" and not _compile_running()
+    return state.get("last_compile_status") in {"starting", "running"} and not _compile_running()
 
 
 def _last_compile_finished() -> str | None:
@@ -818,7 +818,6 @@ def _nightly_steps(run_step, log, _ownership: OwnerLease | None = None) -> int:
         # is unknown, and the steps that read its output wait for the next
         # pass. Counting it as a failure turned a slow healthy night red (#21).
         log("WARNING: compile still running past the wait bound — lint/index/graph deferred to the next pass")
-        log("  a service manager that owns this pass (systemd) stops that compile when the pass exits")
         _remember_deferred_compile(log)
         return failures
     failures += _report_compile_outcome(log, before, started_before) + _report_deferred_loss(log)
@@ -831,8 +830,8 @@ DEFERRED_COMPILE_KEY = "nightly_deferred_compile"
 def _remember_deferred_compile(log) -> None:
     """Keep the deferred compile's start stamp, so the next pass can miss it.
 
-    Under systemd the unit ends here and the compile ends with it; the loss used
-    to be invisible, because the next pass compares against its own start stamp.
+    The compiler owns an independent scope under systemd. If that process dies,
+    its absent outcome must remain visible to the next pass.
     Research: docs/research/2026-09-18-a-pass-that-knows-how-long-it-can-be.md
     """
     started = _last_compile_started()
@@ -860,7 +859,7 @@ def _report_deferred_loss(log) -> int:
 
 def _deferred_outcome_missing(state: dict, deferred: object) -> bool:
     return str(deferred) == str(state.get("last_compile_started_at") or "") and (
-        state.get("last_compile_status") == "running"
+        state.get("last_compile_status") in {"starting", "running"}
     )
 
 

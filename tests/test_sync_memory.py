@@ -1117,3 +1117,17 @@ def test_sync_has_no_git_or_knowledge_mutation_code():
     forbidden = ("git ", "knowledge/", "knowledge\\", "write_text(", "write_bytes(", "[project.scripts]")
 
     assert [item for item in forbidden if item in source] == []
+
+
+def test_text_cli_keeps_the_generation_failure_reason(monkeypatch, capsys):
+    import sync_memory
+
+    report = {
+        'mode': 'apply', 'overall_status': 'error',
+        'actions': [{'id': 'indexes', 'status': 'error',
+                     'message': 'Evidence generation refresh failed.',
+                     'details': {'reason': 'PermissionError: synthetic artifact denied'}}],
+    }
+    monkeypatch.setattr(sync_memory, 'run_sync', lambda **kwargs: report)
+    assert sync_memory.main(['--apply']) == 2
+    assert 'PermissionError: synthetic artifact denied' in capsys.readouterr().out

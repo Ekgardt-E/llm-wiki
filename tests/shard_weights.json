@@ -530,7 +530,7 @@
   "test_maintenance_helpers.py": 1.24,
   "test_markdown_transaction.py": 80.79,
   "test_markdown_transaction_recovery.py": 138.87,
-  "test_maybe_compile.py": 2.4,
+  "test_maybe_compile.py": 2.56,
   "test_mcp_contract.py": 0.55,
   "test_mcp_http.py": 0.24,
   "test_mcp_server.py": 60.98,

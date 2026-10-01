@@ -76,3 +76,12 @@ def test_actual_failure_wins_over_deferral(monkeypatch):
     assert state["last_nightly_status"] == "failed"
     assert state["last_nightly_failure"]["failures"] == 2
     assert state["last_nightly_failure"]["error"] == "real failure"
+
+
+def test_manager_failure_before_compiler_entry_is_not_success(monkeypatch):
+    state = _state(monkeypatch, status='starting')
+    monkeypatch.setattr(nightly, '_compile_running', lambda: False)
+    assert nightly._compile_died_this_pass(state, 'previous-start')
+    messages = []
+    assert nightly._report_deferred_loss(messages.append) == 1
+    assert 'never finished' in messages[0]
