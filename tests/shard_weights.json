@@ -544,6 +544,7 @@
   "test_model_policy.py": 0.46,
   "test_native_language_server.py": 0.06,
   "test_navigation_dead_code_and_stale_words.py": 1.32,
+  "test_nightly_deferral_keeps_its_outcome.py": 0.07,
   "test_no_estimate_inherits_full_confidence.py": 0.0,
   "test_no_model_running_at_exit.py": 0.2,
   "test_no_task_is_claimed_to_be_killed.py": 0.85,

@@ -5827,11 +5827,20 @@ def _nightly_result(
 ) -> dict:
     status = state.get("last_nightly_status")
     last_date = str(state.get("last_nightly_date", ""))[:10]
-    if status == "failed":
-        return _result("scheduler", "error", "Last nightly maintenance failed.", details)
+    incomplete = _incomplete_nightly_result(status, details)
+    if incomplete is not None:
+        return incomplete
     if not status or not last_date:
         return _never_ran_result(installed, now, details)
     return _nightly_freshness_result(state, status, last_date, now, details)
+
+
+def _incomplete_nightly_result(status: object, details: dict) -> dict | None:
+    if status == "failed":
+        return _result("scheduler", "error", "Last nightly maintenance failed.", details)
+    if status == "deferred":
+        return _result("scheduler", "degraded", "Nightly post-compile work is deferred until compilation completes.", details)
+    return None
 
 
 # The first nightly after an install is due within one schedule period (the pass
