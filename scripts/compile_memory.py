@@ -3748,7 +3748,7 @@ class _ApplyPlan:
         for pipeline, assessments in self.claim_groups:
             try:
                 changes, preconditions, candidate_paths = pipeline.plan_changes(
-                    assessments
+                    assessments, pending_pages=self.pending
                 )
             except StaleLifecycleTarget:
                 return self._commit_quarantine()
@@ -3761,13 +3761,19 @@ class _ApplyPlan:
     def _add_policy_changes(
         self, changes: Sequence[MarkdownChange], preconditions: Mapping[str, object]
     ) -> None:
-        known = {item.path for item in self.changes}
         for change in changes:
-            _require_unclaimed_path(known, change.path)
-            self.changes.append(change)
-            self.preconditions[change.path] = preconditions.get(change.path, "absent")
+            self._compose_policy_change(change, preconditions.get(change.path, "absent"))
             self._remember_pending(change)
             self.touched.append(change.path)
+
+    def _compose_policy_change(self, change: MarkdownChange, expected: object) -> None:
+        existing = next((item for item in self.changes if item.path == change.path), None)
+        if existing is None:
+            self.changes.append(change)
+            self.preconditions[change.path] = expected
+            return
+        _require_same_policy_base(existing, change, self.preconditions[change.path], expected)
+        self.changes[self.changes.index(existing)] = change
 
     def _remember_pending(self, change: MarkdownChange) -> None:
         """Only note pages feed the index rebuild."""
@@ -3853,6 +3859,8 @@ class _ApplyPlan:
         )
 
     def _append_receipts(self) -> None:
+        for operation in self.receipt_operations:
+            operation["after_sha256"] = sha256_bytes(self.pending[operation["path"]])
         for source in self._receipt_descriptors():
             self._append_receipt(source)
 
@@ -4009,10 +4017,11 @@ def _claim_lifecycle(record: Mapping[str, object], quarantined: set[str]) -> obj
     return record["lifecycle"]
 
 
-def _require_unclaimed_path(known: set[str], path: str) -> None:
-    if path in known:
-        raise ValueError("compile claim lifecycle overlaps a compile operation target")
-    known.add(path)
+def _require_same_policy_base(
+    existing: MarkdownChange, change: MarkdownChange, original: object, expected: object,
+) -> None:
+    if existing.kind != "replace" or change.kind != "replace" or original != expected:
+        raise StaleLifecycleTarget("lifecycle and compile changes do not share a target snapshot")
 
 
 def _touched_phrase(touched: Sequence[str]) -> str:
