@@ -1096,17 +1096,20 @@ def _scan_bounded_entries(
     directory: Path, *, state_root: Path, deadline: float
 ) -> list[Path]:
     entries: list[Path] = []
+    resolved_root = state_root.resolve(strict=True)
     with os.scandir(directory) as scanned:
         for entry in scanned:
             _check_deadline(deadline)
-            entries.append(_contained_runtime_entry(entry.path, state_root))
+            entries.append(_contained_runtime_entry(entry.path, resolved_root))
+    if state_root.resolve(strict=True) != resolved_root:
+        raise PermissionError("runtime state root changed during observation")
     return entries
 
 
-def _contained_runtime_entry(value: str, state_root: Path) -> Path:
+def _contained_runtime_entry(value: str, resolved_root: Path) -> Path:
     path = Path(value)
     try:
-        path.resolve(strict=True).relative_to(state_root.resolve(strict=True))
+        path.resolve(strict=True).relative_to(resolved_root)
     except (OSError, ValueError) as exc:
         raise PermissionError("runtime artifact escaped the state root") from exc
     return path
@@ -1297,11 +1300,13 @@ def validate_coordinator_v3_runtime(
     blockers: set[str] = set()
     try:
         state = Path(state_root)
+        entries = _artifact_entries(state, deadline)
+        artifact_ids = _artifact_ids(entries)
         database_blockers, known, retained = _coordinator_database_blockers(
-            state, now, deadline, excluded_owner
+            state, now, deadline, excluded_owner, artifact_ids
         )
         blockers.update(database_blockers)
-        blockers.update(_transaction_artifact_blockers(state, deadline, known, retained))
+        blockers.update(_transaction_artifact_blockers(entries, artifact_ids, known, retained))
     except TimeoutError:
         raise
     except (OSError, PermissionError, sqlite3.Error, ValueError):
@@ -1314,6 +1319,7 @@ def _coordinator_database_blockers(
     now: datetime,
     deadline: float,
     excluded_owner: OwnerLease | None,
+    artifact_ids: set[str],
 ) -> tuple[set[str], set[str], set[str]]:
     path = state_root / "run" / "markdown-transactions-v3.sqlite3"
     with contextlib.closing(
@@ -1331,12 +1337,12 @@ def _coordinator_database_blockers(
             database, state_root, now, deadline
         )
         blockers.update(transaction_blockers)
-        known |= _recorded_transactions(database, _artifact_ids(state_root, deadline) - known)
+        known |= _recorded_transactions(database, artifact_ids - known)
     return blockers, known, retained
 
 
-def _artifact_ids(state_root: Path, deadline: float) -> set[str]:
-    return {_transaction_artifact_id(entry) for entry in _artifact_entries(state_root, deadline) if not _staged_prune(entry)}
+def _artifact_ids(entries: list[Path]) -> set[str]:
+    return {_transaction_artifact_id(entry) for entry in entries if not _staged_prune(entry)}
 
 
 def _artifact_entries(state_root: Path, deadline: float) -> list[Path]:
@@ -1469,13 +1475,12 @@ def _validate_abort_receipt(
 
 
 def _transaction_artifact_blockers(
-    state_root: Path,
-    deadline: float,
+    entries: list[Path],
+    artifact_ids: set[str],
     known: set[str],
     retained: set[str],
 ) -> set[str]:
-    artifact_ids = _artifact_ids(state_root, deadline)
-    staged = any(_staged_prune(entry) for entry in _artifact_entries(state_root, deadline))
+    staged = any(_staged_prune(entry) for entry in entries)
     findings = (
         (staged, "transaction_prune_interrupted"),
         (bool(retained & artifact_ids), "transaction_artifact_retained"),

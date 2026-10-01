@@ -2471,7 +2471,8 @@ class TestHandleToolCall:
         )
 
         assert actual == report
-        assert seen["command"][-2:] == ["--deadline", repr(deadline)]
+        assert seen["command"][-2] == "--deadline"
+        assert deadline - 1.0 <= float(seen["command"][-1]) < deadline
         assert seen["command"][0] == sys.executable
         assert 0 < seen["timeout"] <= SHORT_TIMEOUT
         assert seen["env"]["LLM_WIKI_ROOT"] == str(tmp_path / "vault")

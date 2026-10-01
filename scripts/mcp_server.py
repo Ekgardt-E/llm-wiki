@@ -265,7 +265,16 @@ def _recall_operation_seconds(arguments: dict) -> float:
     return QA_DEADLINE_SECONDS
 
 
+def _doctor_operation_seconds(arguments: dict) -> float:
+    if arguments.get("action") != "status":
+        return MCP_OPERATION_SECONDS
+    from settings import setting_value
+
+    return float(setting_value("mcp.doctor_seconds"))
+
+
 _TOOL_BUDGETS = {
+    "doctor": _doctor_operation_seconds,
     "get_architecture": _architecture_operation_seconds,
     "recall": _recall_operation_seconds,
     "get_decisions": _retrieval_operation_seconds,
@@ -3872,6 +3881,14 @@ def _doctor_process_report(completed: subprocess.CompletedProcess) -> dict:
     return report
 
 
+def _doctor_check_deadline(deadline: float) -> float:
+    from settings import setting_value
+
+    remaining = max(0.0, deadline - time.monotonic())
+    reserve = min(float(setting_value("mcp.doctor_return_seconds")), remaining / 2)
+    return deadline - reserve
+
+
 def _run_doctor_process(*, root: Path, state_root: Path, deadline: float) -> dict:
     """Run health outside the model interpreter, within the original deadline."""
     _check_deadline(deadline)
@@ -3879,7 +3896,7 @@ def _run_doctor_process(*, root: Path, state_root: Path, deadline: float) -> dic
     environment["PYTHONIOENCODING"] = "utf-8"
     command = [
         sys.executable, str(Path(__file__).with_name("doctor.py")),
-        "--json", "--deadline", repr(deadline),
+        "--json", "--deadline", repr(_doctor_check_deadline(deadline)),
     ]
     try:
         completed = subprocess.run(
