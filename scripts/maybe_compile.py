@@ -370,7 +370,21 @@ def _independent_compile_command(command: list[str]) -> list[str]:
     """setsid does not detach a compiler from its parent service's cgroup."""
     if not sys.platform.startswith("linux") or not os.environ.get("INVOCATION_ID"):
         return command
+    if not _in_user_service():
+        return command
     return ["systemd-run", "--user", "--scope", "--quiet", "--", *command]
+
+
+def _in_user_service() -> bool:
+    membership = Path("/proc/self/cgroup").read_text(encoding="utf-8")
+    return any(_user_service_path(line.rsplit(":", 1)[-1]) for line in membership.splitlines())
+
+
+def _user_service_path(value: str) -> bool:
+    parts = value.strip().split("/")
+    return parts[-1].endswith(".service") and any(
+        part.startswith("user@") and part.endswith(".service") for part in parts
+    )
 
 
 def _record_compile_launch() -> None:
@@ -391,14 +405,15 @@ def _spawn_claimed(closed_days_only: bool = False) -> tuple[bool, bool, str]:
     # child's proof that the lock it finds was written for it — whether it
     # looks before or after the PID below is replaced.
     placeholder = lock_owner_token() or ""
-    _write_lock(os.getpid(), token=placeholder)
     try:
+        _write_lock(os.getpid(), token=placeholder)
+        command = _compile_command(placeholder, closed_days_only)
         _record_compile_launch()
     except Exception as exc:  # noqa: BLE001 - never launch an unrecorded attempt
         _clear_lock(placeholder)
-        return (False, False, f"launch record failed: {exc}")
+        return (False, False, f"launch preparation failed: {exc}")
     pid = spawn_detached(
-        _compile_command(placeholder, closed_days_only),
+        command,
         stdout_path=LOG_OUT,
         stderr_path=LOG_ERR,
     )

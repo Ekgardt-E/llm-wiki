@@ -15,7 +15,8 @@ raising the nightly wait only moves the same failure; a second daemon or dedicat
 service/environment-copy protocol adds unnecessary lifetime and credential
 handling. A native transient user scope preserves the existing asynchronous
 entry, environment, streams, PID and compile-lock owner token. Linux launches
-from a systemd service (INVOCATION_ID) use that scope; other native launch modes
+from a systemd user service (INVOCATION_ID and actual cgroup membership under
+user@UID.service ending in a service unit) use that scope; other native launch modes
 remain unchanged. A manager refusal must not silently fall back to the cgroup
 that is known to be unsafe.
 
@@ -46,3 +47,8 @@ handed off its actual lock, the scope ran compile_memory lock admission and
 start/finish recording, and a child waiting for explicit release survived its
 Type=oneshot parent. Lock PID equalled child PID; final state was ok and lock
 absent. Real production provider work remains a post-install qualification.
+
+System cron services must not acquire a new dependency on a user manager: their
+long-lived parent does not exit with a nightly invocation. A regression rejects
+INVOCATION_ID alone as proof of user-service ownership. Actual cgroup membership
+also keeps a compile already inside a user scope from being needlessly moved.

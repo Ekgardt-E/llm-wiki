@@ -343,6 +343,7 @@ def test_has_pending_work_true_when_daily_not_in_state(fake_env):
 def test_service_compile_moves_to_its_own_scope(fake_env, monkeypatch, closed):
     monkeypatch.setattr(sys, 'platform', 'linux')
     monkeypatch.setenv('INVOCATION_ID', 'service-invocation')
+    monkeypatch.setattr(Path, 'read_text', lambda *a, **kw: '0::/user.slice/user@1000.service/app.slice/nightly.service\n')
     command = fake_env._compile_command('owner-token', closed)
     assert command[:5] == ['systemd-run', '--user', '--scope', '--quiet', '--']
     assert command[5:7] == [sys.executable, str(fake_env.COMPILE_SCRIPT)]
@@ -393,5 +394,28 @@ def test_launch_record_failure_does_not_start_an_untracked_compile(fake_env, mon
     spawned, reason = fake_env.spawn_compile_if_idle()
     assert not spawned
     assert 'state write refused' in reason
+    assert calls == []
+    assert not fake_env.LOCK_FILE.exists()
+
+
+def test_system_cron_does_not_require_a_user_manager(fake_env, monkeypatch):
+    monkeypatch.setattr(sys, 'platform', 'linux')
+    monkeypatch.setenv('INVOCATION_ID', 'cron-service')
+    monkeypatch.setattr(Path, 'read_text', lambda *a, **kw: '0::/system.slice/cron.service\n')
+    assert fake_env._compile_command('token', False)[:2] == [sys.executable, str(fake_env.COMPILE_SCRIPT)]
+
+
+def test_scope_inspection_failure_releases_parent_claim(fake_env, monkeypatch):
+    monkeypatch.setattr(fake_env, '_has_pending_work', lambda *_: True)
+    calls = []
+    monkeypatch.setattr(fake_env, 'spawn_detached', lambda *a, **kw: calls.append(a))
+
+    def refuse(*args):
+        raise PermissionError('cgroup unreadable')
+
+    monkeypatch.setattr(fake_env, '_compile_command', refuse)
+    spawned, reason = fake_env.spawn_compile_if_idle()
+    assert not spawned
+    assert 'cgroup unreadable' in reason
     assert calls == []
     assert not fake_env.LOCK_FILE.exists()
