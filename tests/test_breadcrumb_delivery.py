@@ -20,6 +20,7 @@ from markdown_transaction import active_markdown_coordinator
 from memory_queue import active_memory_queue
 
 from tests.adopted_capture_vault import adopted_capture_vault, published_intents
+from tests.slow_machine import LONG_TIMEOUT
 
 
 @pytest.fixture
@@ -194,7 +195,8 @@ integration_adapter._run_active_capture_worker_once()
         [sys.executable, "-c", program],
         env=env,
         capture_output=True,
-        timeout=integration_adapter.HOST_HOOK_TIMEOUT_SECONDS,
+        # This waits for a real crash fixture, not the interactive hook's latency.
+        timeout=LONG_TIMEOUT,
     )
     assert exited.returncode == 86, exited.stderr.decode()
     adoption = adopt_orphaned_capture_intents(delivery[2], delivery[3], state_root=delivery[1])
@@ -220,7 +222,9 @@ integration_adapter._wake_capture_worker = lambda *a: os._exit(86)
 queue_breadcrumb('user_prompt', 'demo', 'session-a', {'preview': 'retained before DB'}, 'crash:early')
 """
     env = {**os.environ, "PYTHONPATH": str(integration_adapter.SCRIPTS_DIR)}
-    exited = subprocess.run([sys.executable, "-c", program], env=env, capture_output=True, timeout=5)
+    exited = subprocess.run(
+        [sys.executable, "-c", program], env=env, capture_output=True, timeout=LONG_TIMEOUT,
+    )
     assert exited.returncode == 86, exited.stderr.decode()
     pending = list((delivery[1] / "run/capture-intents/pending").glob("*/*.json"))
     assert len(pending) == 1

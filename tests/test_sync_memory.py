@@ -220,8 +220,10 @@ def test_check_is_default_dry_run_and_actions_are_ordered(tmp_path, monkeypatch)
     assert (bool(calls), _all_dry_run(calls)) == (True, True)
 
 
-def test_dependency_action_checks_lock_and_baseline_environment(tmp_path):
+@pytest.mark.parametrize("clock", [time.monotonic, lambda: 2040.001], ids=["live", "rounding-boundary"])
+def test_dependency_action_checks_lock_and_baseline_environment(tmp_path, monkeypatch, clock):
     sync_memory = _load_sync_memory()
+    monkeypatch.setattr(sync_memory, "time", SimpleNamespace(monotonic=clock))
     (tmp_path / "pyproject.toml").write_text(
         '[project]\ndependencies = ["mcp>=1.29,<2"]\n'
         '[project.optional-dependencies]\nmcp-server = []\n',
