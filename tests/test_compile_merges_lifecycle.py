@@ -129,3 +129,34 @@ def test_interrupted_lifecycle_publication_recovers_one_image(vault, monkeypatch
     assert replay.transaction_id == recovered[-1].id
     assert b'"lifecycle":"superseded"' in after
     assert b'"lifecycle":"active"' in after
+
+
+def _other_subject(record):
+    from reliable_memory import sha256_bytes
+
+    record = dict(record, subject="another-project")
+    semantic = {key: record[key] for key in ("subject", "relation", "value", "qualifiers", "validity")}
+    record["fingerprint"] = sha256_bytes(canonical_json_bytes(semantic))
+    return record
+
+
+def test_multiple_claim_groups_compose_one_shared_target(vault):
+    compiler, root, state, page, semantic, _, plan = _update(vault)
+    old = _other_subject(_claim_record(root, claim_id="other-old", value="blue", text="The prior state is blue.", authority="web"))
+    raw = page.read_bytes()
+    ledger = json.loads(raw.split(b"```json\n")[1].split(b"\n```")[0])
+    ledger["claims"].append(old)
+    page.write_bytes(raw.split(b"```json\n")[0] + b"```json\n" + canonical_json_bytes(ledger) + b"\n```\n")
+    other = _other_subject(_claim_record(root, claim_id="other-new", value="red", text="A second durable exact-byte observation.", authority="user"))
+    operation = dict(semantic, action="create", slug="other-page", claims=[other])
+    plan["operations"].append({"kind": "create", "path": "knowledge/notes/other-page.md", "content": canonical_json_bytes(operation).decode()})
+    inputs = compiler.snapshot_compile_inputs([root / "knowledge/daily/2026-07-14.md"])
+    ClaimIndex(state, vault=root).rebuild()
+    coordinator = MarkdownCoordinator(root, state)
+    result = compiler.apply_compile_plan(inputs, plan, action_key="c" * 64, trigger="manual", coordinator=coordinator)
+    ledger = json.loads(page.read_bytes().split(b"```json\n")[1].split(b"\n```")[0])
+    assert {item["id"]: item["lifecycle"] for item in ledger["claims"]} == {"old": "superseded", "other-old": "superseded", "new": "active"}
+    assert semantic["body_markdown"] in page.read_text()
+    assert "status: superseded" not in page.read_text()
+    replay = compiler.apply_compile_plan(inputs, plan, action_key="c" * 64, trigger="manual", coordinator=coordinator)
+    assert replay.transaction_id == result.transaction_id
