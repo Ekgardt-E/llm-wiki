@@ -1131,3 +1131,16 @@ def test_text_cli_keeps_the_generation_failure_reason(monkeypatch, capsys):
     monkeypatch.setattr(sync_memory, 'run_sync', lambda **kwargs: report)
     assert sync_memory.main(['--apply']) == 2
     assert 'PermissionError: synthetic artifact denied' in capsys.readouterr().out
+
+
+def test_generation_error_detail_survives_sync_and_text_cli(tmp_path, monkeypatch, capsys):
+    import sync_memory
+
+    outcome = sync_memory.doctor._value_error_outcome(ValueError('synthetic source checksum mismatch'), [])
+    monkeypatch.setattr(sync_memory.doctor, 'run_generation_maintenance', lambda **kwargs: outcome)
+    action = sync_memory._run_generation_builder(root=tmp_path, state_root=tmp_path, timeout=30)
+    report = {'mode': 'apply', 'overall_status': 'error', 'actions': [action]}
+    monkeypatch.setattr(sync_memory, 'run_sync', lambda **kwargs: report)
+    assert sync_memory.main(['--apply']) == 2
+    assert 'synthetic source checksum mismatch' in capsys.readouterr().out
+    assert action['details']['diagnostics'] == outcome['details']

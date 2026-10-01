@@ -425,6 +425,7 @@ def _run_generation_builder(
         }.get(status, "Evidence generation refresh failed."),
         {
             "generation": result.get("generation_id"),
+            "diagnostics": result.get("details", {}),
             "partial": bool(result.get("partial")),
             **({"reason": result["reason"]} if result.get("reason") else {}),
         },
@@ -758,6 +759,9 @@ def _print_action(action: dict) -> None:
     reason = action.get("details", {}).get("reason")
     if reason:
         print(f"  reason: {reason}")
+    detail = action.get("details", {}).get("diagnostics", {}).get("message")
+    if detail:
+        print(f"  detail: {detail}")
 
 
 if __name__ == "__main__":
