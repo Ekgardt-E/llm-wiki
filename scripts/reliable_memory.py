@@ -420,7 +420,7 @@ def validate_state_root(path: Path) -> None:
     _require_local_non_reparse_root(path)
     _warn_if_cloud_synchronized(path)
     path.mkdir(parents=True, exist_ok=True)
-    _set_owner_only(path, 0o700)
+    _harden_runtime_owner_only(path, 0o700)
     if _sqlite_lock_probe(path) is not True:
         raise UnsafeStateRoot(f"state root failed the SQLite two-connection locking probe: {path}")
 
