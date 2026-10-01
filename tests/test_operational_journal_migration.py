@@ -9,6 +9,7 @@ import operational_journal_migration as migration
 import pytest
 from reliable_memory import OPERATIONAL_JOURNAL_PENDING, OperationalDatabaseContractError
 
+from tests.slow_machine import LONG_TIMEOUT
 from tests.test_reliability_v3_adoption import _vault, build_adopted_reliability_v3
 
 
@@ -151,7 +152,7 @@ def test_restored_vault_is_accepted_by_normal_client(vault, tmp_path, mode):
         restored_root, restored_state = tmp_path / 'restored-vault', tmp_path / 'restored-state'
         backup.publish_restored_image(
             image=image, vault_root=restored_root, state_root=restored_state,
-            expected_manifest_sha256=digest, deadline=time.monotonic() + 30,
+            expected_manifest_sha256=digest, deadline=time.monotonic() + LONG_TIMEOUT,
         )
         repair.require_reliability_v3_adopted(root=restored_root, state_root=restored_state)
         coordinator = markdown_transaction.active_markdown_coordinator(restored_root, restored_state)

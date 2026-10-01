@@ -167,7 +167,7 @@ def _expire_publisher_lease(delivery, monkeypatch):
         expires = database.execute(
             "SELECT expires_at FROM maintenance_owners WHERE role='capture'"
         ).fetchone()[0]
-    after = datetime.fromisoformat(expires) + timedelta(seconds=1)
+    after = datetime.fromisoformat(expires.replace("Z", "+00:00")) + timedelta(seconds=1)
     original = OwnershipRegistry._from_adopted_database.__func__
 
     def open_after_expiry(cls, *args, **kwargs):

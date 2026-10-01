@@ -1678,7 +1678,8 @@ def _refuse_conflicts(conflicts: list[tuple[Path, Path]], image: Path) -> None:
 def _write_new(source: Path, destination: Path) -> None:
     """Create exclusively and make it durable: the file and the entry that names it."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(destination, flags, 0o600)
     try:
         with os.fdopen(descriptor, "wb") as handle:
             _harden_runtime_owner_only(destination, 0o600)

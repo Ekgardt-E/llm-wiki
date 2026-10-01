@@ -14,10 +14,12 @@ from tests.test_compile_transactions import vault  # noqa: F401 - fixture
 BUDGET = {"provider": "fake", "model": "fake-v1", "max_output_tokens": 4000}
 
 
-def _plan(inputs) -> SimpleNamespace:
+def _plan(inputs, batch) -> SimpleNamespace:
     key = sha256_bytes(canonical_json_bytes([item.logical_path for item in inputs.dailies]))
     plan = {"schema_version": "compile-plan/v2", "operations": []}
-    return SimpleNamespace(plan=plan, action_key=key, cache_hit=False, provider_budget=BUDGET)
+    return SimpleNamespace(
+        plan=plan, action_key=key, cache_hit=False, provider_budget=BUDGET, batch=batch,
+    )
 
 
 def test_a_failed_oldest_day_does_not_stop_the_newer_one(vault, monkeypatch):  # noqa: F811
@@ -35,7 +37,7 @@ def test_a_failed_oldest_day_does_not_stop_the_newer_one(vault, monkeypatch):  #
         seen_statuses.append(state["last_compile_status"])
         if any(item.logical_path.endswith(older.name) for item in inputs.dailies):
             raise ValueError("evidence block is ambiguous or missing")
-        return _plan(inputs)
+        return _plan(inputs, batch)
 
     monkeypatch.setattr(compile_memory, "load_state", lambda: state)
     monkeypatch.setattr(compile_memory, "update_state", lambda mutate: mutate(state))
