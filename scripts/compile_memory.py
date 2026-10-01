@@ -137,7 +137,7 @@ COMPILE_RECEIPT_V3_SCHEMA = Path(__file__).with_name("schemas") / "compile-recei
 VALIDATION_RETRIES = 2
 
 COMPILER_VERSION = "2.0.0"
-NORMALIZATION_VERSION = "normalize-v2"
+NORMALIZATION_VERSION = "normalize-v3-claim-occurrence"
 # One daily log the compile reads; the evidence graph's source bound is 16 GiB.
 MAX_SOURCE_BYTES = 4 * 1024 * 1024
 MAX_PROVIDER_RESPONSE_BYTES = 4 * 1024 * 1024
@@ -196,7 +196,7 @@ CLAIM_CANDIDATE_SCHEMA = {
     },
     "additionalProperties": False,
 }
-CLAIM_EXTRACTOR_VERSION = "compile-claim/v1"
+CLAIM_EXTRACTOR_VERSION = "compile-claim/v2"
 ALLOWED_CATEGORIES = frozenset(
     {"concepts", "decisions", "patterns", "debugging", "qa"}
 )
@@ -2424,7 +2424,7 @@ def _derived_claim(
     fingerprint = sha256_bytes(canonical_json_bytes(semantic))
     return {
         "schema_version": "claim/v1",
-        "id": f"claim-{date}-{fingerprint[:32]}",
+        "id": _claim_occurrence_id(date, fingerprint, binding),
         "fingerprint": fingerprint,
         "text": quote,
         **semantic,
@@ -2446,6 +2446,15 @@ def _derived_claim(
         "extractor_version": CLAIM_EXTRACTOR_VERSION,
     }
 
+
+
+def _claim_occurrence_id(date: str, fingerprint: str, binding: Mapping[str, str]) -> str:
+    identity = {
+        "semantic_fingerprint": fingerprint,
+        "evidence_reference": binding["reference"],
+        "evidence_sha256": binding["quote_sha256"],
+    }
+    return f"claim-{date}-{sha256_bytes(canonical_json_bytes(identity))}"
 
 def _proposed_semantics(
     candidate: Mapping[str, object], date: str
@@ -2787,16 +2796,22 @@ def _ledger_bytes(claims: list) -> bytes:
 
 
 def _merged_claims(existing: list, additions: list) -> list:
-    """Existing claims plus the new ones. A repeated id is a conflict."""
+    """Retain exact replays once; a reused identity with changed content is a conflict."""
     by_id = {str(item["id"]): item for item in existing}
     if len(by_id) != len(existing):
         raise ValueError("target ledger contains a duplicate claim id")
     for record in additions:
-        if str(record["id"]) in by_id:
-            raise ValueError("compile claim id already exists in target ledger")
-        by_id[str(record["id"])] = record
+        _merge_claim_record(by_id, record)
     return list(by_id.values())
 
+
+
+def _merge_claim_record(by_id: dict[str, dict], record: dict) -> None:
+    claim_id = str(record["id"])
+    existing = by_id.get(claim_id)
+    if existing is not None and existing != record:
+        raise ValueError("compile claim id already exists in target ledger")
+    by_id[claim_id] = record
 
 def _with_claim_ledger(page: bytes, records: Sequence[Mapping[str, object]]) -> bytes:
     if not records:
