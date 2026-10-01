@@ -803,6 +803,9 @@ def _prune_reports(log) -> None:
 
 
 def _nightly_steps(run_step, log, _ownership: OwnerLease | None = None) -> int:
+    resumed = _resume_deferred_post_compile(run_step, log)
+    if resumed is not None:
+        return resumed
     failures = _report_deferred_loss(log)
     failures += _run_steps(run_step, log, _intake_steps())
 
@@ -825,6 +828,57 @@ def _nightly_steps(run_step, log, _ownership: OwnerLease | None = None) -> int:
 
 
 DEFERRED_COMPILE_KEY = "nightly_deferred_compile"
+
+
+def _finished_deferred_compile() -> dict | None:
+    state = _safe_state()
+    if not _has_finished_deferred_work(state) or _compile_running():
+        return None
+    return state
+
+
+def _has_finished_deferred_work(state: dict) -> bool:
+    return bool(
+        state.get(DEFERRED_COMPILE_KEY)
+        and state.get("last_compile_finished_at")
+        and state.get("last_compile_status") in {"ok", "error"}
+    )
+
+
+def _deferred_compile_error(state: dict) -> str | None:
+    if state[DEFERRED_COMPILE_KEY] != state.get("last_compile_started_at"):
+        return "deferred compile outcome was superseded before follow-up"
+    return _recorded_compile_error(state, None)
+
+
+def _report_resumed_compile(state: dict, log) -> int:
+    error = _deferred_compile_error(state)
+    if error is None:
+        return 0
+    log(f"  compile: FAILED — {error}")
+    return 1
+
+
+def _complete_deferred_post_compile(expected: object) -> None:
+    def complete(state: dict) -> None:
+        if state.get(DEFERRED_COMPILE_KEY) != expected:
+            raise RuntimeError("deferred compile changed during post-compile work")
+        state.pop(DEFERRED_COMPILE_KEY)
+
+    update_state(complete)
+
+
+def _resume_deferred_post_compile(run_step, log) -> int | None:
+    state = _finished_deferred_compile()
+    if state is None:
+        return None
+    expected = state[DEFERRED_COMPILE_KEY]
+    log.step("resuming deferred post-compile work before new inputs...")
+    compile_failures = _report_resumed_compile(state, log)
+    post_failures = _post_compile_pass(run_step, log)
+    if not post_failures:
+        _complete_deferred_post_compile(expected)
+    return compile_failures + post_failures
 
 
 def _remember_deferred_compile(log) -> None:

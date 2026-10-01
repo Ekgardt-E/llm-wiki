@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 import doctor
+import pytest
 import scheduled_nightly as nightly
 
 
@@ -85,3 +86,87 @@ def test_manager_failure_before_compiler_entry_is_not_success(monkeypatch):
     messages = []
     assert nightly._report_deferred_loss(messages.append) == 1
     assert 'never finished' in messages[0]
+
+
+def _completed_pass(monkeypatch, status="ok"):
+    state = _state(monkeypatch, status)
+    state["last_compile_finished_at"] = "old-finish"
+    monkeypatch.setattr(nightly, "_compile_running", lambda: False)
+    monkeypatch.setattr(nightly, "_run_steps", lambda *args: pytest.fail("new work before owed post-compile pass"))
+    messages = []
+    return state, nightly.StepLog(messages.append), messages
+
+
+def test_finished_deferred_compile_resumes_tail_before_new_inputs(monkeypatch):
+    state, log, messages = _completed_pass(monkeypatch)
+    calls = []
+    monkeypatch.setattr(nightly, "_post_compile_pass", lambda *args: calls.append("tail") or 0)
+
+    assert nightly._nightly_steps(None, log) == 0
+    assert calls == ["tail"]
+    assert nightly.DEFERRED_COMPILE_KEY not in state
+
+
+def test_failed_deferred_compile_is_reported_while_finishing_its_tail(monkeypatch):
+    state, log, messages = _completed_pass(monkeypatch, "error")
+    state["last_compile_error"] = "saved compile failure"
+    monkeypatch.setattr(nightly, "_post_compile_pass", lambda *args: 0)
+
+    assert nightly._nightly_steps(None, log) == 1
+    assert any("saved compile failure" in message for message in messages)
+    assert state["last_compile_error"] == "saved compile failure"
+    assert nightly.DEFERRED_COMPILE_KEY not in state
+
+
+def test_failed_tail_keeps_its_deferred_marker_for_retry(monkeypatch):
+    state, log, messages = _completed_pass(monkeypatch)
+    outcomes = iter((2, 0))
+    monkeypatch.setattr(nightly, "_post_compile_pass", lambda *args: next(outcomes))
+
+    assert nightly._nightly_steps(None, log) == 2
+    assert state[nightly.DEFERRED_COMPILE_KEY] == "old-start"
+    assert nightly._nightly_steps(None, log) == 0
+    assert nightly.DEFERRED_COMPILE_KEY not in state
+
+
+def test_finishing_a_tail_does_not_clear_a_newer_marker(monkeypatch):
+    state, log, messages = _completed_pass(monkeypatch)
+
+    def changed_marker(*args):
+        state[nightly.DEFERRED_COMPILE_KEY] = "new-start"
+        return 0
+
+    monkeypatch.setattr(nightly, "_post_compile_pass", changed_marker)
+    with pytest.raises(RuntimeError, match="deferred compile changed"):
+        nightly._nightly_steps(None, log)
+    assert state[nightly.DEFERRED_COMPILE_KEY] == "new-start"
+
+
+def test_superseded_compile_does_not_hide_the_missing_outcome(monkeypatch):
+    state, log, messages = _completed_pass(monkeypatch)
+    state["last_compile_started_at"] = "later-start"
+    monkeypatch.setattr(nightly, "_post_compile_pass", lambda *args: 0)
+
+    assert nightly._nightly_steps(None, log) == 1
+    assert any("superseded" in message for message in messages)
+    assert nightly.DEFERRED_COMPILE_KEY not in state
+
+
+def test_tail_exception_preserves_the_owed_work(monkeypatch):
+    state, log, messages = _completed_pass(monkeypatch)
+
+    def failed_tail(*args):
+        raise OSError("post-compile failure")
+
+    monkeypatch.setattr(nightly, "_post_compile_pass", failed_tail)
+    with pytest.raises(OSError, match="post-compile failure"):
+        nightly._nightly_steps(None, log)
+    assert state[nightly.DEFERRED_COMPILE_KEY] == "old-start"
+
+
+def test_live_compiler_prevents_post_compile_resume(monkeypatch):
+    state, log, messages = _completed_pass(monkeypatch)
+    monkeypatch.setattr(nightly, "_compile_running", lambda: True)
+
+    assert nightly._resume_deferred_post_compile(None, log) is None
+    assert state[nightly.DEFERRED_COMPILE_KEY] == "old-start"
