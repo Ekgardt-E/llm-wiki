@@ -117,7 +117,12 @@ def _replace_transcript(path: Path, raw: bytes) -> None:
 
 
 @pytest.mark.parametrize("large", [False, True])
-@pytest.mark.parametrize("mutation", ["truncate", "rewrite", "replace"])
+@pytest.mark.parametrize("mutation", [
+    "truncate", "rewrite",
+    pytest.param("replace", marks=pytest.mark.skipif(
+        os.name == "nt", reason="Windows denies rename while the capture descriptor is open",
+    )),
+])
 def test_capture_rejects_other_concurrent_changes(tmp_path, monkeypatch, large, mutation):
     path = _transcript(tmp_path)
     if not large:
@@ -142,6 +147,41 @@ def test_capture_rejects_other_concurrent_changes(tmp_path, monkeypatch, large, 
     monkeypatch.setattr(os, "read", read_then_change)
     with pytest.raises((ValueError, PermissionError), match="changed|replaced"):
         integration_adapter._capture_transcript_text(path, LIMIT)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows handle sharing")
+@pytest.mark.parametrize("large", [False, True])
+def test_windows_blocks_replacement_until_capture_closes_its_descriptor(
+    tmp_path, monkeypatch, large,
+):
+    path = _transcript(tmp_path)
+    if not large:
+        path.write_text(_turn("user", "FIRST QUESTION"))
+    raw, before = path.read_bytes(), path.stat()
+    expected = integration_adapter._capture_transcript_text(path, LIMIT)
+    replacement_bytes = b"X" + raw[1:]
+    original = os.read
+    attempted = False
+
+    def read_then_try_replacement(descriptor, count):
+        nonlocal attempted
+        data = original(descriptor, count)
+        if not attempted:
+            attempted = True
+            with pytest.raises(PermissionError) as refused:
+                _replace_transcript(path, replacement_bytes)
+            assert refused.value.winerror in {5, 32}
+        return data
+
+    monkeypatch.setattr(os, "read", read_then_try_replacement)
+    assert integration_adapter._capture_transcript_text(path, LIMIT) == expected
+    assert attempted
+    assert os.path.samestat(before, path.stat())
+    assert path.read_bytes() == raw
+    replacement = path.with_suffix(".replacement")
+    assert replacement.read_bytes() == replacement_bytes
+    replacement.replace(path)
+    assert path.read_bytes() == replacement_bytes
 
 
 def test_capture_rejects_growth_during_verification(tmp_path, monkeypatch):
