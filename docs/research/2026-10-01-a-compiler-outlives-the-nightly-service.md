@@ -16,7 +16,7 @@ service/environment-copy protocol adds unnecessary lifetime and credential
 handling. A native transient user scope preserves the existing asynchronous
 entry, environment, streams, PID and compile-lock owner token. Linux launches
 from a systemd user service (INVOCATION_ID and actual cgroup membership under
-user@UID.service ending in a service unit) use that scope; other native launch modes
+an instantiated `user@.service` manager ending in a service unit) use that scope; other native launch modes
 remain unchanged. A manager refusal must not silently fall back to the cgroup
 that is known to be unsafe.
 

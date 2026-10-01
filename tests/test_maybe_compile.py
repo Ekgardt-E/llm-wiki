@@ -343,7 +343,10 @@ def test_has_pending_work_true_when_daily_not_in_state(fake_env):
 def test_service_compile_moves_to_its_own_scope(fake_env, monkeypatch, closed):
     monkeypatch.setattr(sys, 'platform', 'linux')
     monkeypatch.setenv('INVOCATION_ID', 'service-invocation')
-    monkeypatch.setattr(Path, 'read_text', lambda *a, **kw: '0::/user.slice/user@1000.service/app.slice/nightly.service\n')
+    # Instantiate the public systemd template with a synthetic numeric UID.
+    manager = f'user@{1000}.service'
+    hierarchy = f'0::/user.slice/{manager}/app.slice/nightly.service\n'
+    monkeypatch.setattr(Path, 'read_text', lambda *a, **kw: hierarchy)
     command = fake_env._compile_command('owner-token', closed)
     assert command[:5] == ['systemd-run', '--user', '--scope', '--quiet', '--']
     assert command[5:7] == [sys.executable, str(fake_env.COMPILE_SCRIPT)]

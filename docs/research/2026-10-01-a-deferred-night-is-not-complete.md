@@ -83,3 +83,42 @@ entry because it takes new inputs before the owed tail; related tests cover
 failed compilation, post-step retry, exceptions, and concurrent marker changes.
 Native continuation of the saved production pass remains a separate acceptance
 step from these tests.
+
+## The health snapshot follows the terminal state
+
+Follow-up on 2026-10-01: a successful continuation wrote its health snapshot
+before its `finally` clause committed the terminal scheduler outcome. Session
+start reused that snapshot for its existing 36-hour freshness window, so it
+reported the previous failed night beside the new successful result.
+
+The complete path is `_post_compile_pass` → `_write_health_report` →
+`_run_nightly_body` finalization → `_record_nightly_result`, followed by
+`session_start_context._stored_health_report` at the next session. The first
+snapshot was necessarily earlier than the state it purported to summarize.
+Move the single measurement to immediately after terminal-state recording.
+Successful, failed, deferred and exception outcomes are measured from stored
+state, without patching a check to a hoped-for success. The existing health
+budget remains; a failed report still cannot change the work outcome.
+
+Primary references checked on 2026-10-01:
+
+- [SQLite atomic commit](https://www.sqlite.org/atomiccommit.html): consumers
+  read committed state, not a prediction of a later transaction.
+- [Python 3.14 finally semantics](https://docs.python.org/3.14/reference/compound_stmts.html#finally-clause):
+  finalization runs on return and on exception. The same structure remains
+  supported by the project's Python 3.10–3.14 versions.
+- [systemd v255 service contract](https://raw.githubusercontent.com/systemd/systemd/v255/man/systemd.service.xml):
+  the service manager observes process completion; application health remains
+  the application's recorded result. No service override is needed.
+
+Alternatives rejected: measuring twice adds a second full scan; manually
+rewriting only the scheduler check can conceal a real failure; lowering the
+cache lifetime makes every session pay for an ordering defect. The report
+continues to be a dated snapshot and does not promise future health. No new
+schema, limit, dependency or daemon is introduced. Existing saved reports are
+compatible and replaced by the next legitimate health measurement.
+
+Regression tests run the producer and the existing cached-report reader. On
+the old code, the stored report observes the previous status, and deferred or
+exception paths leave no new report. The new code observes the committed
+success, failure, deferral or exception outcome exactly once.

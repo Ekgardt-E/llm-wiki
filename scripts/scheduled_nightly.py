@@ -649,9 +649,6 @@ def _post_compile_pass(run_step, log) -> int:
     log.step("compacting retrieval telemetry...")
     _compact_telemetry(log)
 
-    # one full health report, read at session start instead of measured there.
-    log.step("writing the health report...")
-    _write_health_report(log)
     return failures
 
 
@@ -1007,6 +1004,9 @@ def _run_nightly_body(
         raise
     finally:
         _record_result_quietly(today, failures, _terminal_error(terminal_error, fence))
+        # Session start must read the committed outcome of this pass.
+        # Measure once, after success, failure or deferral has been persisted.
+        _write_health_report(print)
 
 
 def _nightly_pass(
