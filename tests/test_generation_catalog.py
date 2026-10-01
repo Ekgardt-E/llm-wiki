@@ -73,6 +73,51 @@ def _catalog(tmp_path: Path):
     return generation_catalog.GenerationCatalog(state_root, clock=lambda: NOW)
 
 
+def _emulate_acl_propagation(monkeypatch, catalog) -> None:
+    import markdown_transaction
+    import reliable_memory
+
+    original = reliable_memory._harden_runtime_owner_only
+    parent = catalog.catalog_path.parent
+
+    def harden(path, mode):
+        if path == parent:
+            return markdown_transaction._harden_windows_acl(path)
+        return original(path, mode)
+
+    def command(argv):
+        import subprocess
+
+        if len(argv) > 2:
+            for path in catalog.generations_path.rglob("*"):
+                path.chmod(path.stat().st_mode)
+        listing = f"{parent} DOMAIN\\user:(OI)(CI)(F)\n"
+        return subprocess.CompletedProcess(argv, 0, listing, "")
+
+    monkeypatch.setattr(reliable_memory, "_harden_runtime_owner_only", harden)
+    monkeypatch.setattr(markdown_transaction, "_windows_acl_identity", lambda: "DOMAIN\\user")
+    monkeypatch.setattr(markdown_transaction, "_run_acl_command", command)
+    monkeypatch.setattr(markdown_transaction, "_windows_dacl_protected", lambda path: True, raising=False)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="uses POSIX chmod to model metadata propagation")
+def test_registration_does_not_reapply_a_correct_parent_acl(tmp_path, monkeypatch):
+    catalog = _catalog(tmp_path)
+    _publish(catalog, "acl-stable")
+    _emulate_acl_propagation(monkeypatch, catalog)
+
+    assert catalog.register("acl-stable")["generation_id"] == "acl-stable"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires native inherited ACL metadata")
+def test_windows_registration_keeps_inherited_artifacts_unchanged(tmp_path):
+    catalog = _catalog(tmp_path)
+    _publish(catalog, "acl-stable")
+
+    assert catalog.register("acl-stable")["generation_id"] == "acl-stable"
+    assert catalog.register("acl-stable")["generation_id"] == "acl-stable"
+
+
 def _publish(
     catalog,
     generation_id: str,

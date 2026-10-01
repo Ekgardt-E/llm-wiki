@@ -4860,11 +4860,66 @@ def _verify_no_other_acl(path: Path, acl_lines: list[str], identity: str) -> Non
 def _harden_windows_acl(path: Path) -> None:
     identity = _windows_acl_identity()
     permission = _acl_permission(path, identity)
+    if _windows_acl_already_hardened(path, identity, permission):
+        return
     verified = _apply_windows_acl(path, permission)
     acl_lines = _acl_lines_naming(verified.stdout, identity)
     owner_lines = [line for line in acl_lines if identity.casefold() in line.casefold()]
     _verified_owner_acl_line(path, owner_lines)
     _verify_no_other_acl(path, acl_lines, identity)
+
+
+@functools.lru_cache(maxsize=1)
+def _windows_security_readers():
+    library = ctypes.WinDLL("advapi32", use_last_error=True)
+    read = library.GetFileSecurityW
+    read.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p,
+                     wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    read.restype = wintypes.BOOL
+    control = library.GetSecurityDescriptorControl
+    control.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.WORD),
+                        ctypes.POINTER(wintypes.DWORD)]
+    control.restype = wintypes.BOOL
+    return read, control
+
+
+def _windows_security_descriptor(path: Path, read):
+    size = wintypes.DWORD()
+    read(str(path), 4, None, 0, ctypes.byref(size))  # DACL_SECURITY_INFORMATION
+    if ctypes.get_last_error() != 122:  # ERROR_INSUFFICIENT_BUFFER
+        raise ctypes.WinError(ctypes.get_last_error())
+    descriptor = ctypes.create_string_buffer(size.value)
+    if not read(str(path), 4, descriptor, size.value, ctypes.byref(size)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return descriptor
+
+
+def _windows_dacl_protected(path: Path) -> bool:
+    if os.name != "nt":
+        return False
+    read, inspect = _windows_security_readers()
+    descriptor = _windows_security_descriptor(path, read)
+    control, revision = wintypes.WORD(), wintypes.DWORD()
+    if not inspect(descriptor, ctypes.byref(control), ctypes.byref(revision)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return bool(control.value & 0x1000)  # SE_DACL_PROTECTED
+
+
+def _windows_acl_already_hardened(path: Path, identity: str, permission: str) -> bool:
+    try:
+        verified = _run_acl_command(["icacls", str(path)])
+        return _exact_windows_acl(verified, identity, permission) and _windows_dacl_protected(path)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _exact_windows_acl(verified, identity: str, permission: str) -> bool:
+    if verified.returncode != 0:
+        return False
+    lines = _acl_lines_naming(verified.stdout, identity)
+    if len(lines) != 1:
+        return False
+    return re.search(r"(?:^|\s)" + re.escape(permission) + r"$", lines[0], re.IGNORECASE) is not None
 
 
 def _console_code_page() -> tuple[str, ...]:
